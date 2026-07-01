@@ -1,7 +1,9 @@
 # A Parallel Heuristic for FCBQP
 
 This repository contains the implementation of the algorithm described in the paper
-*A Parallel Heuristic for the Fixed Cardinality Binary Quadratic Program*.
+
+*A Parallel Heuristic for the Fixed Cardinality Binary Quadratic Program (Thi Thanh Tu Le, Thorsten Koch)*.
+
 The main implementation is in `main.cpp`.
 
 The fixed-cardinality binary quadratic program is:
