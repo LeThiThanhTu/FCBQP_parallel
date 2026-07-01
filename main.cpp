@@ -15,18 +15,11 @@
 #include <cctype>
 #include <cstdlib>
 #include <omp.h>
+#include <filesystem>
 #include <atomic>
 #include <unordered_map>
 
-#if __has_include(<filesystem>)
-   #include <filesystem>
-   namespace fs = std::filesystem;
-#elif __has_include(<experimental/filesystem>)
-   #include <experimental/filesystem>
-   namespace fs = std::experimental::filesystem;
-#else
-   #error "A C++17 filesystem implementation is required."
-#endif
+namespace fs = std::filesystem;
 
 struct Instance {
    int n = 0;
