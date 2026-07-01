@@ -2,9 +2,11 @@
 
 This repository contains the implementation of the algorithm described in the paper
 
-*A Parallel Heuristic for the Fixed Cardinality Binary Quadratic Program (Thi Thanh Tu Le, Thorsten Koch)*.
+*A Parallel Heuristic for the Fixed Cardinality Binary Quadratic Program (Thi Thanh Tu Le and Thorsten Koch)*.
 
 The main implementation is in `main.cpp`.
+
+The detailed computational results mentioned in the paper is in `summary_results.xlsx`.
 
 The fixed-cardinality binary quadratic program is:
 
