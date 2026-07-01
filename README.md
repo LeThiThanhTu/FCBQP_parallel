@@ -1,4 +1,4 @@
-# A Parallel Heuristic for FCBQP: $\min\max \ f(x)=x^\top Qx \quad \text{s.t.} \quad \sum_{i=1}^{n}x_i=k,\quad x \in \{0,1\}^n$
+# A Parallel Heuristic for FCBQP: $\min / \max \ f(x)=x^\top Qx \quad \text{s.t.} \quad \sum_{i=1}^{n}x_i=k,\quad x \in \lbrace 0,1 \rbrace^n$
 
 The heuristic implementation is in `main.cpp`. Paper: A Parallel Heuristic for the Fixed Cardinality Binary Quadratic Program.
 
