@@ -1,10 +1,12 @@
-# FCBQP Parallel
+# A Parallel Heuristic for FCBQP: $\min$ or $\max \ f(x)=x^\top Qx \quad \text{s.t.} \quad \sum_{i=1}^{n}x_i=k,\quad x\in\{0,1\}^{n}$
 
-Parallel FCBQP runner for the benchmark instances in `dataset`.
+The heuristic implementation is in `main.cpp`. Paper: A Parallel Heuristic for the Fixed Cardinality Binary Quadratic Program.
+
+The benchmark instances are in `dataset`. The collection contains instances from Maximum Dispersion Problem (MDP), Maximum Clique Problem (MCP), and Graph Bisection Problem (GBP).
 
 ## Requirements
 
-- A modern C++17 compiler with standard `<filesystem>` support, such as GCC 9+, Clang 9+, or a recent MSVC.
+- A C++17 compiler with standard `<filesystem>` support.
 - OpenMP.
 - CMake 3.10 or newer.
 
@@ -21,6 +23,7 @@ With Unix Makefiles, this is equivalent to:
 cmake -S . -B build
 cd build
 make
+make run
 ```
 
 ## Run All Dataset Sets
