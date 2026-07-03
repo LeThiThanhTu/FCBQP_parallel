@@ -1157,7 +1157,7 @@ std::vector<int> path_relinking(const Instance& ins, const std::vector<int>& x_c
 
       const double quality_score = (worst_elite_obj - elite_pool[e].obj) / obj_denom;
 
-      const double distance_score = static_cast<double>(d) / static_cast<double>(2* ins.k);
+      const double distance_score = static_cast<double>(d) / static_cast<double>(2 * ins.k);
 
       const double score = quality_score + distance_score;
 
@@ -1228,7 +1228,7 @@ std::vector<int> random_greedy_construction(const Instance& ins, const std::vect
 
    num_random = std::min(num_random, static_cast<int>(cand.size()));
 
-   const int d_0 = static_cast<int>(std::ceil(par.d_frac * static_cast<double>(ins.k)));
+   const int d_0 = static_cast<int>(std::ceil(par.d_frac * ins.k));
 
    const int max_attempts = elite_pool.empty() ? 1 : 200;
 
@@ -1351,7 +1351,6 @@ std::vector<int> elite_based_restart(const Instance& ins, const Params& par, con
       }
    }
 
-   std::shuffle(fixed_ones.begin(), fixed_ones.end(), rng);
    std::sort(fixed_ones.begin(), fixed_ones.end(),
       [&](int a, int b) {
          if (elite_freq[a] != elite_freq[b]) {
@@ -1384,7 +1383,7 @@ std::vector<int> elite_based_restart(const Instance& ins, const Params& par, con
       throw std::runtime_error("elite_based_restart: infeasible elite fixing.");
    }
 
-   const int d_1 = static_cast<int>(std::ceil(par.d_frac * static_cast<double>(k)));
+   const int d_1 = static_cast<int>(std::ceil(par.d_frac * k));
 
    const int max_attempts = 200;
 
@@ -1658,7 +1657,7 @@ static Params params_for_instance(const Instance& ins) {
       par.t_alpha = 15;
    }
    else {
-      par.t_alpha = static_cast<int>(0.2 * sqrt(std::min(ins.k, ins.n - ins.k)));
+      par.t_alpha = std::max(1, static_cast<int>(0.2 * sqrt(std::min(ins.k, ins.n - ins.k))));
    }
 
    if (ins.n <= 7000) {
