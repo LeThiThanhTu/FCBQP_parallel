@@ -99,6 +99,23 @@ static inline bool time_limit_reached(
    return elapsed >= time_limit_seconds;
 }
 
+static inline bool stop_run(
+   const std::chrono::steady_clock::time_point& t_start,
+   const Params& par,
+   std::atomic<bool>& stop_requested
+) {
+   if (stop_requested.load(std::memory_order_relaxed)) {
+      return true;
+   }
+
+   if (time_limit_reached(t_start, par.time_limit_seconds)) {
+      stop_requested.store(true, std::memory_order_relaxed);
+      return true;
+   }
+
+   return false;
+}
+
 static std::string basename_without_extension(const std::string& path) {
    size_t slash = path.find_last_of("/\\");
    std::string name = (slash == std::string::npos) ? path : path.substr(slash + 1);
@@ -655,7 +672,7 @@ std::vector<double> interaction_impact(const Instance& ins) {
 
    const double scale = (n > 1) ? (2.0 * static_cast<double>(ins.k - 1) / static_cast<double>(n - 1)) : 0.0;
 
-#pragma omp parallel for schedule(static)
+   #pragma omp parallel for schedule(static)
    for (int i = 0; i < n; ++i) {
       double diag = 0.0;
       double off_sum = 0.0;
@@ -925,8 +942,7 @@ void tabu_search(
          return;
       }
 
-      const double output_obj =
-         output_objective_from_internal(candidate_internal_obj, sense, scale);
+      const double output_obj =  output_objective_from_internal(candidate_internal_obj, sense, scale);
 
       if (target_reached(output_obj, best_known.objective, sense)) {
          res.reached_target = true;
@@ -946,7 +962,7 @@ void tabu_search(
    cand_in.reserve(n);
    int no_improve_tabu = 0;
    for (int iter = 0; iter < par.T_max; ++iter) {
-      if (stop_requested.load(std::memory_order_relaxed) || time_limit_reached(t_start, par.time_limit_seconds)) {
+      if (stop_run(t_start, par, stop_requested)) {
          break;
       }
       if (ones.empty() || zeros.empty()) break;
@@ -1609,13 +1625,12 @@ Result main_block(
    std::vector<int> incumbent_for_guide;
    std::vector<EliteSol> elite_snapshot;
    for (int start = 0; start < par.num_starts; ++start) {
-      if (stop_requested.load(std::memory_order_relaxed)) break;
-      if (time_limit_reached(t_start, par.time_limit_seconds)) break;
+      if (stop_run(t_start, par, stop_requested)) break;
       std::vector<int> x;
 
       std::vector<int> elite_count_snapshot;
 
-#pragma omp critical
+      #pragma omp critical
       {
          elite_snapshot = global_elite_pool;
          elite_count_snapshot = global_elite_ones_count;
@@ -1651,7 +1666,7 @@ Result main_block(
       double obj = objective_x(x, ins);
       tabu_search(x, ins, obj, par, t_start, sense, scale, best_known, res, stop_requested);
 
-#pragma omp critical
+      #pragma omp critical
       {
          try_insert_elite(ins, global_elite_pool, global_elite_ones_count, x, obj, par);
       }
@@ -1762,7 +1777,6 @@ int main(int argc, char* argv[]) {
       Result best_run_res;
       best_run_res.best_obj = std::numeric_limits<double>::infinity();
 
-      std::cout << "Instance: " << instance_path << "\n";
       std::cout << "Sense: " << objective_sense_name(sense) << "\n";
       std::cout << "Scale: " << print_scale_name(scale) << "\n";
       std::cout << "Runs: " << num_runs << "\n";
@@ -1785,7 +1799,7 @@ int main(int argc, char* argv[]) {
          std::vector<int> global_elite_ones_count(ins.n, 0);
          std::atomic<bool> stop_requested(false);
 
-#pragma omp parallel
+         #pragma omp parallel
          {
             const int tid = omp_get_thread_num();
             const int num_threads = omp_get_num_threads();
@@ -1818,7 +1832,7 @@ int main(int argc, char* argv[]) {
 
             const double local_time_to_target = local_res.time_to_target;
 
-#pragma omp critical
+            #pragma omp critical
             {
                if (local_reached_target && (!run_reached_target || local_time_to_target < run_time_to_target)) {
                   run_reached_target = true;
