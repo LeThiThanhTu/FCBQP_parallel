@@ -7,14 +7,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenMP REQUIRED)
 
-add_executable(FCBQP_parallel
+add_executable(main
     main.cpp
 )
 
-target_compile_options(FCBQP_parallel PRIVATE
+target_compile_options(main PRIVATE
     -O3
 )
 
-target_link_libraries(FCBQP_parallel PRIVATE
+target_link_libraries(main PRIVATE
     OpenMP::OpenMP_CXX
 )
