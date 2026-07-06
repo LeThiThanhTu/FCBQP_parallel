@@ -60,11 +60,11 @@ The best-known objective file is `best_known_results.csv`.
 From the repository root:
 
 ```bash
-./build/FCBQP_parallel <max|min> <full|half> <instance.qsc_or_txt> [best_known_results.csv_or_folder] [base_seed] [runs]
+./build/main <max|min> <full|half> <instance.qsc_or_txt> [best_known_results.csv_or_folder] [base_seed] [runs]
 ```
 
 For example:
 
 ```bash
-./build/FCBQP_parallel max half dataset/MDP/LA/LA_n2000_m100.qsc best_known_results.csv
+./build/main max half dataset/MDP/LA/LA_n2000_m100.qsc best_known_results.csv
 ```
