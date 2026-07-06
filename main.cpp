@@ -1,7 +1,11 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -11,15 +15,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <vector>
-#include <cctype>
-#include <cstdlib>
-#include <omp.h>
-#include <filesystem>
-#include <atomic>
 #include <unordered_map>
-
-namespace fs = std::filesystem;
+#include <vector>
+#include <omp.h>
 
 struct Instance {
    int n = 0;
@@ -27,13 +25,13 @@ struct Instance {
    bool sparse = false;
    double density = 0.0;
    size_t nnz_full = 0;
-   std::vector<double> Q;       
-   std::vector<int> row_ptr;    
-   std::vector<int> col_ind;    
-   std::vector<double> val;     
+   std::vector<double> Q;
+   std::vector<int> row_ptr;
+   std::vector<int> col_ind;
+   std::vector<double> val;
 };
 
-static constexpr double SPARSE_DENSITY_THRESHOLD = 0.002; 
+static constexpr double SPARSE_DENSITY_THRESHOLD = 0.002;
 
 static inline double Qat(const Instance& ins, int i, int j) {
    if (!ins.sparse) {
@@ -70,6 +68,8 @@ struct Result {
    std::vector<int> best_x;
    double best_obj = std::numeric_limits<double>::infinity();
    double time_to_best = 0.0;
+   double time_to_target = std::numeric_limits<double>::quiet_NaN();
+   bool reached_target = false;
 };
 
 struct EliteSol {
@@ -108,11 +108,13 @@ static std::string basename_without_extension(const std::string& path) {
 }
 
 static bool regular_file_exists(const std::string& path) {
+   namespace fs = std::filesystem;
    std::error_code ec;
    return fs::exists(path, ec) && fs::is_regular_file(path, ec);
 }
 
 static bool directory_exists(const std::string& path) {
+   namespace fs = std::filesystem;
    std::error_code ec;
    return fs::exists(path, ec) && fs::is_directory(path, ec);
 }
@@ -143,7 +145,7 @@ ObjectiveSense parse_objective_sense(const std::string& s) {
    if (t == "min") return ObjectiveSense::Min;
    if (t == "max") return ObjectiveSense::Max;
 
-   throw std::runtime_error("Objective must be either 'max' or 'min'.");
+   throw std::runtime_error("Objective sense must be either 'max' or 'min'.");
 }
 
 PrintScale parse_print_scale(const std::string& s) {
@@ -155,7 +157,7 @@ PrintScale parse_print_scale(const std::string& s) {
    if (t == "full") return PrintScale::Full;
    if (t == "half") return PrintScale::Half;
 
-   throw std::runtime_error("Scaling must be either 'full' or 'half'.");
+   throw std::runtime_error("Print scale must be either 'full' or 'half'.");
 }
 
 static inline const char* objective_sense_name(ObjectiveSense sense) {
@@ -166,7 +168,11 @@ static inline const char* print_scale_name(PrintScale scale) {
    return (scale == PrintScale::Full) ? "full" : "half";
 }
 
-static inline double output_objective_from_internal(double internal_obj, ObjectiveSense sense, PrintScale scale) {
+static inline double output_objective_from_internal(
+   double internal_obj,
+   ObjectiveSense sense,
+   PrintScale scale
+) {
    if (sense == ObjectiveSense::Max) {
       return (scale == PrintScale::Full)
          ? (-1.0) * internal_obj
@@ -178,7 +184,12 @@ static inline double output_objective_from_internal(double internal_obj, Objecti
       : 0.5 * internal_obj;
 }
 
-static inline bool target_reached(double output_obj, double target_obj, ObjectiveSense sense, double tol = 1e-6) {
+static inline bool target_reached(
+   double output_obj,
+   double target_obj,
+   ObjectiveSense sense,
+   double tol = 1e-6
+) {
    if (!std::isfinite(target_obj)) return false;
 
    if (sense == ObjectiveSense::Max) {
@@ -270,7 +281,10 @@ static std::unordered_map<std::string, BestKnownEntry> read_best_known_csv(const
    return table;
 }
 
-static BestKnownEntry find_best_known_for_instance(const std::string& csv_filename, const std::string& instance_path) {
+static BestKnownEntry find_best_known_for_instance(
+   const std::string& csv_filename,
+   const std::string& instance_path
+) {
    if (csv_filename.empty()) {
       return BestKnownEntry{};
    }
@@ -278,7 +292,7 @@ static BestKnownEntry find_best_known_for_instance(const std::string& csv_filena
    const std::string base = basename_without_extension(instance_path);
    auto it = table.find(base);
    if (it != table.end()) return it->second;
-   const std::string name_with_ext = fs::path(instance_path).filename().string();
+   const std::string name_with_ext = std::filesystem::path(instance_path).filename().string();
    it = table.find(name_with_ext);
    if (it != table.end()) return it->second;
    return BestKnownEntry{};
@@ -286,7 +300,10 @@ static BestKnownEntry find_best_known_for_instance(const std::string& csv_filena
 
 using BestKnownObjective = BestKnownEntry;
 
-static std::string resolve_best_known_objective_path(const std::string& instance_path, const std::string& best_known_arg) {
+static std::string resolve_best_known_objective_path(
+   const std::string& instance_path,
+   const std::string& best_known_arg
+) {
    (void)instance_path;
 
    if (best_known_arg.empty()) return "";
@@ -302,7 +319,10 @@ static std::string resolve_best_known_objective_path(const std::string& instance
    return "";
 }
 
-static BestKnownObjective read_best_known_objective_file(const std::string& csv_filename, const std::string& instance_path) {
+static BestKnownObjective read_best_known_objective_file(
+   const std::string& csv_filename,
+   const std::string& instance_path
+) {
    BestKnownObjective e = find_best_known_for_instance(csv_filename, instance_path);
    if (e.loaded) {
       e.filename = csv_filename;
@@ -311,7 +331,7 @@ static BestKnownObjective read_best_known_objective_file(const std::string& csv_
    return e;
 }
 
-Instance read_instance(const std::string& filename, ObjectiveSense sense) {
+Instance read_qsc(const std::string& filename, ObjectiveSense sense) {
    std::ifstream in(filename);
    if (!in) {
       throw std::runtime_error("Cannot open file: " + filename);
@@ -345,7 +365,7 @@ Instance read_instance(const std::string& filename, ObjectiveSense sense) {
    }
    if (first_tokens.size() == 1) {
       if (lines.size() < 2) {
-         throw std::runtime_error("Type 2 format needs at least two header lines.");
+         throw std::runtime_error("Type 2 QSC file needs at least two header lines.");
       }
       {
          std::istringstream iss(lines[0]);
@@ -367,7 +387,7 @@ Instance read_instance(const std::string& filename, ObjectiveSense sense) {
       if (!(iss >> ins.n >> ins.k)) {
          throw std::runtime_error("Failed to read n and k from first line for Type 1 format.");
       }
-      declared_num_entries = -1; 
+      declared_num_entries = -1;
       first_entry_line = 1;
       detected_type = 1;
    }
@@ -380,7 +400,7 @@ Instance read_instance(const std::string& filename, ObjectiveSense sense) {
       detected_type = 3;
    }
    else {
-      throw std::runtime_error( "Cannot detect data format." );
+      throw std::runtime_error("Cannot detect data format.");
    }
 
    if (ins.n < 0) {
@@ -411,7 +431,7 @@ Instance read_instance(const std::string& filename, ObjectiveSense sense) {
 
       if (!(iss >> i >> j >> v)) {
          throw std::runtime_error(
-            "Invalid entry line while reading file: " + lines[t]
+            "Invalid entry line while reading QSC file: " + lines[t]
          );
       }
 
@@ -423,7 +443,11 @@ Instance read_instance(const std::string& filename, ObjectiveSense sense) {
 
    if (declared_num_entries >= 0 &&
       static_cast<int>(entries.size()) != declared_num_entries) {
-      std::cerr << "WARNING: declared number_of_entries = " << declared_num_entries << ", but actually read " << entries.size() << " entries.\n";
+      std::cerr << "WARNING: declared number_of_entries = "
+         << declared_num_entries
+         << ", but actually read "
+         << entries.size()
+         << " entries.\n";
    }
 
    int shift = 0;
@@ -447,12 +471,15 @@ Instance read_instance(const std::string& filename, ObjectiveSense sense) {
          }
          else {
             shift = 1;
-            std::cerr << "WARNING: indexing is ambiguous";
+            std::cerr << "WARNING: indexing is ambiguous because all indices lie in both "
+               << "[0,n-1] and [1,n]. Assuming 1-based indexing.\n";
          }
       }
       else {
          std::ostringstream oss;
-         oss << "Cannot detect index base. Index range in file is [" << min_index << ", " << max_index << "], but n = " << ins.n << ".";
+         oss << "Cannot detect index base. Index range in file is ["
+            << min_index << ", " << max_index
+            << "], but n = " << ins.n << ".";
          throw std::runtime_error(oss.str());
       }
    }
@@ -466,7 +493,7 @@ Instance read_instance(const std::string& filename, ObjectiveSense sense) {
 
       if (i < 0 || i >= ins.n || j < 0 || j >= ins.n) {
          std::ostringstream oss;
-         oss << "Index out of range while reading file. "
+         oss << "Index out of range while reading QSC file. "
             << "Original entry: (" << e.i << ", " << e.j << "), "
             << "after shift: (" << i << ", " << j << "), "
             << "n = " << ins.n << ".";
@@ -485,7 +512,7 @@ Instance read_instance(const std::string& filename, ObjectiveSense sense) {
    std::sort(full_entries.begin(), full_entries.end(), [](const Entry& a, const Entry& b) {
       if (a.i != b.i) return a.i < b.i;
       return a.j < b.j;
-   });
+      });
 
    std::vector<Entry> nz;
    nz.reserve(full_entries.size());
@@ -500,7 +527,7 @@ Instance read_instance(const std::string& filename, ObjectiveSense sense) {
 
    nz.erase(std::remove_if(nz.begin(), nz.end(), [](const Entry& e) {
       return e.v == 0.0;
-   }), nz.end());
+      }), nz.end());
 
    ins.nnz_full = nz.size();
    const double denom = static_cast<double>(ins.n) * static_cast<double>(ins.n);
@@ -601,7 +628,12 @@ std::vector<double> compute_h_x(const std::vector<int>& x, const Instance& ins) 
    return h;
 }
 
-static inline void add_symmetric_column_to_h(std::vector<double>& h, const Instance& ins, int col, double scale) {
+static inline void add_symmetric_column_to_h(
+   std::vector<double>& h,
+   const Instance& ins,
+   int col,
+   double scale
+) {
    if (scale == 0.0) return;
 
    if (ins.sparse) {
@@ -623,7 +655,7 @@ std::vector<double> interaction_impact(const Instance& ins) {
 
    const double scale = (n > 1) ? (2.0 * static_cast<double>(ins.k - 1) / static_cast<double>(n - 1)) : 0.0;
 
-   #pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static)
    for (int i = 0; i < n; ++i) {
       double diag = 0.0;
       double off_sum = 0.0;
@@ -647,13 +679,19 @@ std::vector<double> interaction_impact(const Instance& ins) {
    return imp;
 }
 
-std::vector<int> build_set(const Instance& ins, const Params& par, const std::vector<double>& impact) {
+
+std::vector<int> build_set(
+   const Instance& ins,
+   const Params& par,
+   const std::vector<double>& impact
+) {
+
    std::vector<int> idx(ins.n);
    std::iota(idx.begin(), idx.end(), 0);
 
    std::sort(idx.begin(), idx.end(), [&](int a, int b) {
       return impact[a] < impact[b];
-   });
+      });
 
    int v_0 = static_cast<int>(std::ceil(par.v_0_frac * ins.n));
    v_0 = std::min(v_0, ins.k);
@@ -664,38 +702,52 @@ std::vector<int> build_set(const Instance& ins, const Params& par, const std::ve
    return C;
 }
 
-int hamming_distance(const std::vector<int>& a, const std::vector<int>& b) {
-   int n = static_cast<int>(a.size());
+int hamming_distance(const std::vector<int>& a, const std::vector<int>& b, const Instance& ins) {
    int d = 0;
-   for (int i = 0; i < n; ++i) {
+   for (int i = 0; i < ins.n; ++i) {
       if (a[i] != b[i]) ++d;
    }
    return d;
 }
 
-void add_to_elite_count(const std::vector<int>& x, std::vector<int>& elite_ones_count) {
-   const int n = static_cast<int>(x.size());
-   for (int i = 0; i < n; ++i) {
+void add_to_elite_count(
+   const std::vector<int>& x,
+   std::vector<int>& elite_ones_count,
+   const Instance& ins
+) {
+   for (int i = 0; i < ins.n; ++i) {
       if (x[i] == 1) {
          elite_ones_count[i]++;
       }
    }
 }
 
-void remove_from_elite_count(const std::vector<int>& x, std::vector<int>& elite_ones_count) {
-   const int n = static_cast<int>(x.size());
-   for (int i = 0; i < n; ++i) {
+void remove_from_elite_count(
+   const std::vector<int>& x,
+   std::vector<int>& elite_ones_count,
+   const Instance& ins
+) {
+   for (int i = 0; i < ins.n; ++i) {
       if (x[i] == 1) {
          elite_ones_count[i]--;
       }
    }
 }
 
-void insert_elite_pool(const Instance& ins, std::vector<EliteSol>& elite_pool, std::vector<int>& elite_ones_count, const std::vector<int>& x, double obj, const Params& par) {
+void try_insert_elite(
+   const Instance& ins,
+   std::vector<EliteSol>& elite_pool,
+   std::vector<int>& elite_ones_count,
+   const std::vector<int>& x,
+   double obj,
+   const Params& par
+) {
    const double EPS = 1e-6;
+
    for (const auto& e : elite_pool) {
       if (e.x == x) return;
    }
+
    auto sort_elite_pool = [&]() {
       std::sort(elite_pool.begin(), elite_pool.end(),
          [](const EliteSol& a, const EliteSol& b) {
@@ -707,7 +759,7 @@ void insert_elite_pool(const Instance& ins, std::vector<EliteSol>& elite_pool, s
       int dmin = std::numeric_limits<int>::max();
       for (int r = 0; r < static_cast<int>(elite_pool.size()); ++r) {
          if (r == excluded_idx) continue;
-         dmin = std::min(dmin, hamming_distance(x, elite_pool[r].x));
+         dmin = std::min(dmin, hamming_distance(x, elite_pool[r].x, ins));
       }
       return dmin;
       };
@@ -716,18 +768,18 @@ void insert_elite_pool(const Instance& ins, std::vector<EliteSol>& elite_pool, s
       int dmin = std::numeric_limits<int>::max();
       for (int r = 0; r < static_cast<int>(elite_pool.size()); ++r) {
          if (r == member_idx) continue;
-         dmin = std::min(dmin, hamming_distance(elite_pool[member_idx].x, elite_pool[r].x));
+         dmin = std::min(dmin, hamming_distance(elite_pool[member_idx].x, elite_pool[r].x, ins));
       }
       return dmin;
       };
 
-   const int d_0 = static_cast<int>(std::ceil(par.d_frac * static_cast<double>(ins.k)));
+   const int d = static_cast<int>(std::ceil(par.d_frac * ins.k));
 
-   const int relaxed_threshold = std::max(2, static_cast<int>(std::ceil(0.80 * static_cast<double>(d_0))));
+   const int relaxed_threshold = std::max(2, static_cast<int>(std::ceil(0.80 * d)));
 
    if (elite_pool.empty()) {
       elite_pool.push_back({ x, obj });
-      add_to_elite_count(x, elite_ones_count);
+      add_to_elite_count(x, elite_ones_count, ins);
       return;
    }
 
@@ -737,17 +789,17 @@ void insert_elite_pool(const Instance& ins, std::vector<EliteSol>& elite_pool, s
 
    int min_dist = std::numeric_limits<int>::max();
    for (const auto& e : elite_pool) {
-      min_dist = std::min(min_dist, hamming_distance(x, e.x));
+      min_dist = std::min(min_dist, hamming_distance(x, e.x, ins));
    }
 
    if (static_cast<int>(elite_pool.size()) < 30) {
-      const bool enough_diversity = (min_dist >= d_0);
+      const bool enough_diversity = (min_dist >= d);
       const bool good_and_comparable_diversity =
          new_global_best && (min_dist >= relaxed_threshold);
 
       if (enough_diversity || good_and_comparable_diversity) {
          elite_pool.push_back({ x, obj });
-         add_to_elite_count(x, elite_ones_count);
+         add_to_elite_count(x, elite_ones_count, ins);
          sort_elite_pool();
       }
       return;
@@ -762,12 +814,15 @@ void insert_elite_pool(const Instance& ins, std::vector<EliteSol>& elite_pool, s
 
       const int old_comparable_dist =
          (old_dist_to_others == std::numeric_limits<int>::max())
-         ? d_0
-         : static_cast<int>(std::floor(0.80 * static_cast<double>(old_dist_to_others)));
+         ? d
+         : static_cast<int>(std::floor(0.80 * old_dist_to_others));
 
-      const bool full_diversity_after_replacement = (cand_dist_to_others >= d_0);
+      const bool full_diversity_after_replacement =
+         (cand_dist_to_others >= d);
 
-      const bool comparable_diversity_after_replacement = (cand_dist_to_others >= relaxed_threshold) &&  (cand_dist_to_others >= old_comparable_dist);
+      const bool comparable_diversity_after_replacement =
+         (cand_dist_to_others >= relaxed_threshold) &&
+         (cand_dist_to_others >= old_comparable_dist);
 
       const bool better_than_this_member = (obj < elite_pool[r].obj - EPS);
       const bool acceptable_quality = (obj <= elite_pool.back().obj + EPS);
@@ -779,8 +834,8 @@ void insert_elite_pool(const Instance& ins, std::vector<EliteSol>& elite_pool, s
 
       if (!can_replace) continue;
 
-      const double quality_gain = elite_pool[r].obj - obj; 
-      const double replacement_key = -quality_gain - 1e-6 * static_cast<double>(cand_dist_to_others);
+      const double quality_gain = elite_pool[r].obj - obj;
+      const double replacement_key = -quality_gain - 1e-6 * cand_dist_to_others;
 
       if (replacement_key < best_replacement_key) {
          best_replacement_key = replacement_key;
@@ -789,9 +844,9 @@ void insert_elite_pool(const Instance& ins, std::vector<EliteSol>& elite_pool, s
    }
 
    if (replace_idx >= 0) {
-      remove_from_elite_count(elite_pool[replace_idx].x, elite_ones_count);
+      remove_from_elite_count(elite_pool[replace_idx].x, elite_ones_count, ins);
       elite_pool[replace_idx] = { x, obj };
-      add_to_elite_count(x, elite_ones_count);
+      add_to_elite_count(x, elite_ones_count, ins);
       sort_elite_pool();
    }
 }
@@ -814,7 +869,13 @@ void tabu_search(
    std::vector<int>& x,
    const Instance& ins,
    double& obj,
-   const Params& par
+   const Params& par,
+   const std::chrono::steady_clock::time_point& t_start,
+   ObjectiveSense sense,
+   PrintScale scale,
+   const BestKnownObjective& best_known,
+   Result& res,
+   std::atomic<bool>& stop_requested
 ) {
    const int n = static_cast<int>(x.size());
    const int k = std::accumulate(x.begin(), x.end(), 0);
@@ -859,12 +920,35 @@ void tabu_search(
 
    std::vector<int> best_x = x;
    double best_obj = obj;
+   auto record_target_if_reached = [&](double candidate_internal_obj) {
+      if (!best_known.loaded || res.reached_target) {
+         return;
+      }
+
+      const double output_obj =
+         output_objective_from_internal(candidate_internal_obj, sense, scale);
+
+      if (target_reached(output_obj, best_known.objective, sense)) {
+         res.reached_target = true;
+
+         auto t_now = std::chrono::steady_clock::now();
+         res.time_to_target =
+            std::chrono::duration<double>(t_now - t_start).count();
+
+         stop_requested.store(true, std::memory_order_relaxed);
+      }
+      };
+
+   record_target_if_reached(best_obj);
    std::vector<int> cand_out;
    std::vector<int> cand_in;
    cand_out.reserve(n);
    cand_in.reserve(n);
    int no_improve_tabu = 0;
    for (int iter = 0; iter < par.T_max; ++iter) {
+      if (stop_requested.load(std::memory_order_relaxed) || time_limit_reached(t_start, par.time_limit_seconds)) {
+         break;
+      }
       if (ones.empty() || zeros.empty()) break;
       cand_out = ones;
       cand_in = zeros;
@@ -877,7 +961,7 @@ void tabu_search(
             cand_out.begin() + num_cand_out,
             cand_out.end(),
             [&](int a, int b) {
-               return h[a] > h[b]; 
+               return h[a] > h[b];
             }
          );
       }
@@ -889,7 +973,7 @@ void tabu_search(
             cand_in.begin() + num_cand_in,
             cand_in.end(),
             [&](int a, int b) {
-               return h[a] < h[b]; 
+               return h[a] < h[b];
             }
          );
       }
@@ -900,11 +984,18 @@ void tabu_search(
 
       for (int i : cand_out) {
          for (int j : cand_in) {
-            const double delta = 2.0 * (h[j] - h[i]) + Qat(ins, i, i) + Qat(ins, j, j) - 2.0 * Qat(ins, i, j);
+            const double delta =
+               2.0 * (h[j] - h[i])
+               + Qat(ins, i, i)
+               + Qat(ins, j, j)
+               - 2.0 * Qat(ins, i, j);
+
             const double new_obj = obj + delta;
             const bool is_tabu = (iter <= tabu_until[i] || iter <= tabu_until[j]);
             const bool aspiration = (new_obj < best_obj - 1e-6);
+
             if (is_tabu && !aspiration) continue;
+
             if (delta < best_delta) {
                best_delta = delta;
                best_i = i;
@@ -916,7 +1007,12 @@ void tabu_search(
       if (best_i < 0 || best_j < 0) {
          for (int i : cand_out) {
             for (int j : cand_in) {
-               const double delta = 2.0 * (h[j] - h[i]) + Qat(ins, i, i) + Qat(ins, j, j) - 2.0 * Qat(ins, i, j);
+               const double delta =
+                  2.0 * (h[j] - h[i])
+                  + Qat(ins, i, i)
+                  + Qat(ins, j, j)
+                  - 2.0 * Qat(ins, i, j);
+
                if (delta < best_delta) {
                   best_delta = delta;
                   best_i = i;
@@ -944,6 +1040,12 @@ void tabu_search(
          best_obj = obj;
          best_x = x;
          no_improve_tabu = 0;
+
+         record_target_if_reached(best_obj);
+
+         if (res.reached_target) {
+            break;
+         }
       }
       else {
          ++no_improve_tabu;
@@ -952,16 +1054,16 @@ void tabu_search(
       if (no_improve_tabu >= 2000) {
          break;
       }
-      
+
       const int T = tabu_tenure_T(no_improve_tabu, par);
 
       tabu_until[best_i] = iter + T;
-      tabu_until[best_j] = iter + int (T * 2/3);
+      tabu_until[best_j] = iter + (2 * T) / 3;
    }
 
    x = best_x;
    obj = best_obj;
-   
+
 }
 
 std::vector<int> path_relink_one_direction(
@@ -1053,12 +1155,7 @@ std::vector<int> path_relink_one_direction(
 
       for (int i : cand_remove) {
          for (int j : cand_add) {
-            const double delta =
-               2.0 * (h[j] - h[i])
-               + Qat(ins, i, i)
-               + Qat(ins, j, j)
-               - 2.0 * Qat(ins, i, j);
-
+            const double delta = 2.0 * (h[j] - h[i]) + Qat(ins, i, i) + Qat(ins, j, j) - 2.0 * Qat(ins, i, j);
             moves.push_back({ i, j, delta });
          }
       }
@@ -1116,7 +1213,13 @@ std::vector<int> path_relink_one_direction(
    return best_x;
 }
 
-std::vector<int> path_relinking(const Instance& ins, const std::vector<int>& x_current, const std::vector<EliteSol>& elite_pool, const Params& par, std::mt19937_64& rng) {
+std::vector<int> path_relinking(
+   const Instance& ins,
+   const std::vector<int>& x_current,
+   const std::vector<EliteSol>& elite_pool,
+   const Params& par,
+   std::mt19937_64& rng
+) {
    const int n = ins.n;
 
    if (static_cast<int>(x_current.size()) != n) {
@@ -1131,7 +1234,7 @@ std::vector<int> path_relinking(const Instance& ins, const std::vector<int>& x_c
       return x_current;
    }
 
-   const int d_0 = static_cast<int>( std::ceil(par.d_frac * ins.k));
+   const int d_0 = static_cast<int>(std::ceil(par.d_frac * ins.k));
 
    double best_elite_obj = elite_pool.front().obj;
    double worst_elite_obj = elite_pool.back().obj;
@@ -1145,7 +1248,7 @@ std::vector<int> path_relinking(const Instance& ins, const std::vector<int>& x_c
    double best_score = -std::numeric_limits<double>::infinity();
 
    for (int e = 0; e < static_cast<int>(elite_pool.size()); ++e) {
-      const int d = hamming_distance(x_current, elite_pool[e].x);
+      const int d = hamming_distance(x_current, elite_pool[e].x, ins);
 
       if (d == 0) {
          continue;
@@ -1157,7 +1260,12 @@ std::vector<int> path_relinking(const Instance& ins, const std::vector<int>& x_c
 
       const double quality_score = (worst_elite_obj - elite_pool[e].obj) / obj_denom;
 
-      const double distance_score = static_cast<double>(d) / static_cast<double>(2 * ins.k);
+      const int max_possible_dist = 2 * std::min(ins.k, ins.n - ins.k);
+
+      const double distance_score =
+         (max_possible_dist > 0)
+         ? static_cast<double>(d) / static_cast<double>(max_possible_dist)
+         : 0.0;
 
       const double score = quality_score + distance_score;
 
@@ -1170,7 +1278,7 @@ std::vector<int> path_relinking(const Instance& ins, const std::vector<int>& x_c
 
    if (guide_idx < 0) {
       for (int e = 0; e < static_cast<int>(elite_pool.size()); ++e) {
-         const int d = hamming_distance(x_current, elite_pool[e].x);
+         const int d = hamming_distance(x_current, elite_pool[e].x, ins);
 
          if (d > best_dist) {
             best_dist = d;
@@ -1214,21 +1322,27 @@ std::vector<int> path_relinking(const Instance& ins, const std::vector<int>& x_c
    return best_backward;
 }
 
-std::vector<int> random_greedy_construction(const Instance& ins, const std::vector<int>& C2, double random_frac, const Params& par, const std::vector<EliteSol>& elite_pool, std::mt19937_64& rng) {
+std::vector<int> random_greedy_construction(
+   const Instance& ins,
+   const std::vector<int>& C1,
+   double random_frac,
+   const Params& par,
+   const std::vector<EliteSol>& elite_pool,
+   std::mt19937_64& rng
+) {
    const int n = ins.n;
    const int k = ins.k;
 
-   int num_random = static_cast<int>(std::round(random_frac * k));
-   num_random = std::max(0, std::min(num_random, k));
+   int v_3 = static_cast<int>(std::round(random_frac * k));
 
-   std::vector<int> cand = C2;
+   std::vector<int> cand = C1;
 
    std::sort(cand.begin(), cand.end());
    cand.erase(std::unique(cand.begin(), cand.end()), cand.end());
 
-   num_random = std::min(num_random, static_cast<int>(cand.size()));
+   v_3 = std::min(v_3, static_cast<int>(cand.size()));
 
-   const int d_0 = static_cast<int>(std::ceil(par.d_frac * ins.k));
+   const int d = static_cast<int>(std::ceil(par.d_frac * ins.k));
 
    const int max_attempts = elite_pool.empty() ? 1 : 200;
 
@@ -1241,7 +1355,7 @@ std::vector<int> random_greedy_construction(const Instance& ins, const std::vect
       std::shuffle(cand_attempt.begin(), cand_attempt.end(), rng);
       int ones_now = 0;
 
-      for (int t = 0; t < num_random; ++t) {
+      for (int t = 0; t < v_3; ++t) {
          int i = cand_attempt[t];
          if (x[i] == 0) {
             x[i] = 1;
@@ -1285,7 +1399,7 @@ std::vector<int> random_greedy_construction(const Instance& ins, const std::vect
          x[best_i] = 1;
          ++ones_now;
 
-          add_symmetric_column_to_h(h, ins, best_i, 1.0);
+         add_symmetric_column_to_h(h, ins, best_i, 1.0);
       }
 
       if (elite_pool.empty()) {
@@ -1294,10 +1408,10 @@ std::vector<int> random_greedy_construction(const Instance& ins, const std::vect
 
       int cur_min_dist = std::numeric_limits<int>::max();
       for (const auto& e : elite_pool) {
-         cur_min_dist = std::min(cur_min_dist, hamming_distance(x, e.x));
+         cur_min_dist = std::min(cur_min_dist, hamming_distance(x, e.x, ins));
       }
 
-      if (cur_min_dist >= d_0) {
+      if (cur_min_dist >= d) {
          return x;
       }
 
@@ -1310,7 +1424,12 @@ std::vector<int> random_greedy_construction(const Instance& ins, const std::vect
    return best_x;
 }
 
-std::vector<int> elite_based_restart(const Instance& ins, const Params& par, const std::vector<EliteSol>& elite_pool, std::mt19937_64& rng) {
+std::vector<int> elite_based_restart(
+   const Instance& ins,
+   const Params& par,
+   const std::vector<EliteSol>& elite_pool,
+   std::mt19937_64& rng
+) {
    const int n = ins.n;
    const int k = ins.k;
 
@@ -1340,7 +1459,7 @@ std::vector<int> elite_based_restart(const Instance& ins, const Params& par, con
    }
 
    const int elite_size = static_cast<int>(elite_pool.size());
-   const int freq_threshold = static_cast<int>(std::ceil(0.85 * static_cast<double>(elite_size)));
+   const int freq_threshold = static_cast<int>(std::ceil(0.85 * elite_size));
 
    std::vector<int> fixed_ones;
    fixed_ones.reserve(k);
@@ -1383,7 +1502,7 @@ std::vector<int> elite_based_restart(const Instance& ins, const Params& par, con
       throw std::runtime_error("elite_based_restart: infeasible elite fixing.");
    }
 
-   const int d_1 = static_cast<int>(std::ceil(par.d_frac * k));
+   const int d = static_cast<int>(std::ceil(par.d_frac * k));
 
    const int max_attempts = 200;
 
@@ -1406,10 +1525,10 @@ std::vector<int> elite_based_restart(const Instance& ins, const Params& par, con
 
       int cur_min_dist = std::numeric_limits<int>::max();
       for (const auto& e : elite_pool) {
-         cur_min_dist = std::min(cur_min_dist, hamming_distance(x, e.x));
+         cur_min_dist = std::min(cur_min_dist, hamming_distance(x, e.x, ins));
       }
 
-      if (cur_min_dist >= d_1) {
+      if (cur_min_dist >= d) {
          return x;
       }
 
@@ -1421,15 +1540,19 @@ std::vector<int> elite_based_restart(const Instance& ins, const Params& par, con
 
    return best_x;
 }
-
-std::vector<int> random_diverse_restart(const Instance& ins, const Params& par, std::mt19937_64& rng, const std::vector<EliteSol>& elite_pool) {
+std::vector<int> random_diverse_restart(
+   const Instance& ins,
+   const Params& par,
+   std::mt19937_64& rng,
+   const std::vector<EliteSol>& elite_pool
+) {
    const int n = ins.n;
    const int k = ins.k;
 
    std::vector<int> idx(n);
    std::iota(idx.begin(), idx.end(), 0);
 
-   const int d_1 = static_cast<int>(std::ceil(par.d_frac * ins.k));
+   const int d = static_cast<int>(std::ceil(par.d_frac * ins.k));
 
    const int max_attempts = 200;
 
@@ -1450,10 +1573,10 @@ std::vector<int> random_diverse_restart(const Instance& ins, const Params& par, 
 
       int cur_min_dist = std::numeric_limits<int>::max();
       for (const auto& e : elite_pool) {
-         cur_min_dist = std::min(cur_min_dist, hamming_distance(x, e.x));
+         cur_min_dist = std::min(cur_min_dist, hamming_distance(x, e.x, ins));
       }
 
-      if (cur_min_dist >= d_1) {
+      if (cur_min_dist >= d) {
          return x;
       }
 
@@ -1492,7 +1615,7 @@ Result main_block(
 
       std::vector<int> elite_count_snapshot;
 
-      #pragma omp critical
+#pragma omp critical
       {
          elite_snapshot = global_elite_pool;
          elite_count_snapshot = global_elite_ones_count;
@@ -1506,39 +1629,50 @@ Result main_block(
          if (!incumbent_for_guide.empty() && (start % 10 == 0)) {
             x = elite_based_restart(ins, par, elite_snapshot, rng);
          }
-         else if (start % 10 == 9){
+         else if (start % 10 == 9) {
             x = random_diverse_restart(ins, par, rng, elite_snapshot);
          }
          else {
             std::vector<int> C2_local = C1;
+
             for (int i = 0; i < ins.n; ++i) {
                if (elite_count_snapshot[i] > 0) {
                   C2_local.push_back(i);
                }
             }
+
             std::sort(C2_local.begin(), C2_local.end());
             C2_local.erase(std::unique(C2_local.begin(), C2_local.end()), C2_local.end());
             x = random_greedy_construction(ins, C2_local, par.balance, par, elite_snapshot, rng);
          }
+
       }
 
       double obj = objective_x(x, ins);
-      tabu_search(x, ins, obj, par);
+      tabu_search(x, ins, obj, par, t_start, sense, scale, best_known, res, stop_requested);
 
-      #pragma omp critical
+#pragma omp critical
       {
-         insert_elite_pool(ins, global_elite_pool, global_elite_ones_count, x, obj, par);
+         try_insert_elite(ins, global_elite_pool, global_elite_ones_count, x, obj, par);
       }
 
       if (obj < res.best_obj) {
          res.best_obj = obj;
          res.best_x = x;
+
          auto t_now = std::chrono::steady_clock::now();
          res.time_to_best = std::chrono::duration<double>(t_now - t_start).count();
+
          incumbent_for_guide = x;
          no_improve = 0;
+
          const double output_obj = output_objective_from_internal(res.best_obj, sense, scale);
          if (best_known.loaded && target_reached(output_obj, best_known.objective, sense)) {
+            if (!res.reached_target) {
+               res.reached_target = true;
+               auto t_target_now = std::chrono::steady_clock::now();
+               res.time_to_target = std::chrono::duration<double>(t_target_now - t_start).count();
+            }
             stop_requested.store(true, std::memory_order_relaxed);
          }
       }
@@ -1546,439 +1680,252 @@ Result main_block(
          ++no_improve;
       }
    }
+
    return res;
-}
-
-
-static std::string csv_escape(const std::string& s) {
-   bool need_quotes = false;
-   for (char c : s) {
-      if (c == ',' || c == '"' || c == '\n' || c == '\r') {
-         need_quotes = true;
-         break;
-      }
-   }
-   if (!need_quotes) return s;
-
-   std::string out = "\"";
-   for (char c : s) {
-      if (c == '"') out += "\"\"";
-      else out.push_back(c);
-   }
-   out += "\"";
-   return out;
-}
-
-static bool file_exists_for_append_header(const std::string& path) {
-   std::error_code ec;
-   return fs::exists(path, ec) && fs::is_regular_file(path, ec) && fs::file_size(path, ec) > 0;
-}
-
-static std::string default_report_csv_path() {
-   std::error_code ec;
-
-   fs::path stdout_target = fs::read_symlink("/proc/self/fd/1", ec);
-   if (!ec && !stdout_target.empty()) {
-      std::error_code ec_file;
-      if (fs::is_regular_file(stdout_target, ec_file)) {
-         fs::path log_dir = stdout_target.parent_path();
-         if (!log_dir.empty()) {
-            return (log_dir / "FCBQP_10runs_summary.csv").string();
-         }
-      }
-   }
-
-   return "FCBQP_10runs_summary.csv";
-}
-
-static void append_summary_csv_row(
-   const std::string& report_csv,
-   const std::string& instance_name,
-   const std::string& best_known_str,
-   double best_found_obj,
-   double average_obj,
-   const std::string& average_tts_str,
-   int reached_count
-) {
-   const bool has_header = file_exists_for_append_header(report_csv);
-
-   std::ofstream out(report_csv, std::ios::app);
-   if (!out) {
-      throw std::runtime_error("Cannot open report CSV for writing: " + report_csv);
-   }
-
-   if (!has_header) {
-      out << "Instance,best-known obj,best found obj,average obj,average TTS,Times reaching best-known obj\n";
-   }
-
-   out << csv_escape(instance_name) << ","
-       << csv_escape(best_known_str) << ","
-       << std::fixed << std::setprecision(9) << best_found_obj << ","
-       << std::fixed << std::setprecision(9) << average_obj << ","
-       << csv_escape(average_tts_str) << ","
-       << reached_count << "\n";
-}
-
-struct RunConfig {
-   ObjectiveSense sense = ObjectiveSense::Max;
-   PrintScale scale = PrintScale::Full;
-   std::string instance_path;
-   std::string best_known_arg = "best_known_results.csv";
-   uint64_t base_seed = 1ULL;
-   int num_runs = 10;
-   std::string report_csv;
-};
-
-static Params params_for_instance(const Instance& ins) {
-   Params par;
-   par.num_starts = 200000;
-   par.v_0_frac = 0.40;
-
-   if (ins.n <= 7000) {
-      par.T_max = 10000;
-   }
-   else {
-      par.T_max = 20000;
-   }
-
-   if (ins.n <= 500) {
-      par.t_alpha = 3;
-   }
-   else if (ins.n <= 2000) {
-      par.t_alpha = 5;
-   }
-   else if (ins.n <= 5000) {
-      par.t_alpha = 7;
-   }
-   else if (ins.n <= 8000) {
-      par.t_alpha = 9;
-   }
-   else if (ins.n <= 20000) {
-      par.t_alpha = 15;
-   }
-   else {
-      par.t_alpha = std::max(1, static_cast<int>(0.2 * sqrt(std::min(ins.k, ins.n - ins.k))));
-   }
-
-   if (ins.n <= 7000) {
-      par.v_1 = std::min(std::max(80, int(ins.k / 3)), 100);
-      par.v_2 = std::min(std::max(120, int((ins.n - ins.k) / 12)), 200);
-   }
-   else {
-      par.v_1 = std::min(std::max(80, int(ins.k / 3)), 300);
-      par.v_2 = std::min(std::max(120, int((ins.n - ins.k) / 12)), 300);
-   }
-
-   par.time_limit_seconds = 600.0;
-   return par;
-}
-
-static int run_single_instance(const RunConfig& cfg) {
-   if (cfg.num_runs <= 0) {
-      throw std::runtime_error("Number of runs must be positive.");
-   }
-
-   Instance ins = read_instance(cfg.instance_path, cfg.sense);
-   const std::string best_known_path = resolve_best_known_objective_path(cfg.instance_path, cfg.best_known_arg);
-   BestKnownObjective best_known;
-   if (!best_known_path.empty()) {
-      best_known = read_best_known_objective_file(best_known_path, cfg.instance_path);
-   }
-
-   Params par = params_for_instance(ins);
-   const std::vector<double> impact = interaction_impact(ins);
-   const std::vector<int> C1 = build_set(ins, par, impact);
-
-   std::vector<double> run_output_objs;
-   run_output_objs.reserve(cfg.num_runs);
-   std::vector<double> reached_tts;
-   reached_tts.reserve(cfg.num_runs);
-
-   double best_output_obj = (cfg.sense == ObjectiveSense::Max)
-      ? -std::numeric_limits<double>::infinity()
-      :  std::numeric_limits<double>::infinity();
-   Result best_run_res;
-   best_run_res.best_obj = std::numeric_limits<double>::infinity();
-
-   std::cout << "Instance: " << cfg.instance_path << "\n";
-   std::cout << "Sense: " << objective_sense_name(cfg.sense) << "\n";
-   std::cout << "Scale: " << print_scale_name(cfg.scale) << "\n";
-   std::cout << "Runs: " << cfg.num_runs << "\n";
-   std::cout << "Summary file: " << cfg.report_csv << "\n";
-
-   if (best_known.loaded) {
-      std::cout << "Best-known objective = " << std::fixed << std::setprecision(9) << best_known.objective << "\n";
-   }
-   else {
-      std::cout << "Best-known objective file = not found or no matching instance\n";
-   }
-
-   for (int run = 1; run <= cfg.num_runs; ++run) {
-      auto t0 = std::chrono::steady_clock::now();
-
-      Result global_res;
-      global_res.best_obj = std::numeric_limits<double>::infinity();
-
-      std::vector<EliteSol> global_elite_pool;
-      std::vector<int> global_elite_ones_count(ins.n, 0);
-      std::atomic<bool> stop_requested(false);
-
-      #pragma omp parallel
-      {
-         const int tid = omp_get_thread_num();
-         const int num_threads = omp_get_num_threads();
-
-         Params local_par = par;
-         const int base = par.num_starts / num_threads;
-         const int extra = par.num_starts % num_threads;
-
-         local_par.num_starts = base + (tid < extra ? 1 : 0);
-
-         const uint64_t run_seed = cfg.base_seed
-            + 0xD1B54A32D192ED03ULL * static_cast<uint64_t>(run)
-            + 0x9E3779B97F4A7C15ULL * static_cast<uint64_t>(tid + 1);
-
-         Result local_res = main_block(
-            ins,
-            local_par,
-            run_seed,
-            global_elite_pool,
-            global_elite_ones_count,
-            C1,
-            t0,
-            cfg.sense,
-            cfg.scale,
-            best_known,
-            stop_requested
-         );
-
-         #pragma omp critical
-         {
-            if (local_res.best_obj < global_res.best_obj) {
-               global_res = std::move(local_res);
-            }
-         }
-      }
-
-      auto t1 = std::chrono::steady_clock::now();
-      const double elapsed = std::chrono::duration<double>(t1 - t0).count();
-      const double output_obj = output_objective_from_internal(global_res.best_obj, cfg.sense, cfg.scale);
-      const bool reached_best_known = best_known.loaded && target_reached(output_obj, best_known.objective, cfg.sense);
-
-      run_output_objs.push_back(output_obj);
-      if (reached_best_known) {
-         reached_tts.push_back(global_res.time_to_best);
-      }
-
-      const bool improves_best = (cfg.sense == ObjectiveSense::Max)
-         ? (output_obj > best_output_obj + 1e-6)
-         : (output_obj < best_output_obj - 1e-6);
-      if (improves_best) {
-         best_output_obj = output_obj;
-         best_run_res = std::move(global_res);
-      }
-
-      std::cout << "Run " << run << "/" << cfg.num_runs
-                << ": best objective = " << std::fixed << std::setprecision(9) << output_obj
-                << ", reached best-known = " << (reached_best_known ? "YES" : "NO")
-                << ", TTS (s) = " << std::fixed << std::setprecision(6) << global_res.time_to_best
-                << ", runtime (s) = " << std::fixed << std::setprecision(6) << elapsed
-                << "\n";
-   }
-
-   double sum_obj = 0.0;
-   for (double v : run_output_objs) sum_obj += v;
-   const double average_obj = sum_obj / static_cast<double>(run_output_objs.size());
-
-   const int reached_count = static_cast<int>(reached_tts.size());
-   std::string average_tts_str = "unknown";
-   double average_tts = 0.0;
-   if (reached_count > 0) {
-      double sum_tts = 0.0;
-      for (double v : reached_tts) sum_tts += v;
-      average_tts = sum_tts / static_cast<double>(reached_count);
-      std::ostringstream oss;
-      oss << std::fixed << std::setprecision(6) << average_tts;
-      average_tts_str = oss.str();
-   }
-
-   std::string best_known_str = "";
-   if (best_known.loaded) {
-      std::ostringstream oss;
-      oss << std::fixed << std::setprecision(9) << best_known.objective;
-      best_known_str = oss.str();
-   }
-
-   const std::string instance_name = basename_without_extension(cfg.instance_path);
-   append_summary_csv_row(
-      cfg.report_csv,
-      instance_name,
-      best_known_str,
-      best_output_obj,
-      average_obj,
-      average_tts_str,
-      reached_count
-   );
-
-   std::cout << "\nSummary over " << cfg.num_runs << " runs\n";
-   std::cout << "Instance name: " << instance_name << "\n";
-   std::cout << "Best-known obj from CSV = " << (best_known.loaded ? best_known_str : "") << "\n";
-   std::cout << "Best found obj = " << std::fixed << std::setprecision(9) << best_output_obj << "\n";
-   std::cout << "Average obj = " << std::fixed << std::setprecision(9) << average_obj << "\n";
-   std::cout << "Average TTS = " << average_tts_str << "\n";
-   std::cout << "Times reaching best-known obj = " << reached_count << "\n";
-   std::cout << "Summary appended to " << cfg.report_csv << "\n";
-
-   if (!best_run_res.best_x.empty()) {
-      double recomputed_obj = objective_x(best_run_res.best_x, ins);
-      double diff = recomputed_obj - best_run_res.best_obj;
-      if (std::abs(diff) > 1e-5) {
-         std::cout << "Wrong obj value !!\n";
-      }
-
-      std::cout << "Selected vars of best run: ";
-      for (int i = 0; i < ins.n; i++) {
-         if (best_run_res.best_x[i] == 1) {
-            std::cout << (i + 1) << " ";
-         }
-      }
-      std::cout << "\n";
-   }
-
-   return 0;
-}
-
-static bool is_instance_file(const fs::path& path) {
-   std::string ext = path.extension().string();
-   std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
-      return static_cast<char>(std::tolower(c));
-   });
-   return ext == ".qsc" || ext == ".txt";
-}
-
-static void append_batch_configs(
-   std::vector<RunConfig>& configs,
-   const std::string& dataset_dir,
-   const std::string& set_name,
-   ObjectiveSense sense,
-   PrintScale scale,
-   const std::string& best_known_arg,
-   uint64_t base_seed,
-   int num_runs,
-   const std::string& report_csv
-) {
-   const fs::path set_root = fs::path(dataset_dir) / set_name;
-   std::error_code ec;
-   if (!fs::exists(set_root, ec) || !fs::is_directory(set_root, ec)) {
-      std::cerr << "WARNING: dataset set not found: " << set_root.string() << "\n";
-      return;
-   }
-
-   std::vector<fs::path> files;
-   for (fs::recursive_directory_iterator it(set_root, ec), end; !ec && it != end; it.increment(ec)) {
-      if (it->is_regular_file(ec) && is_instance_file(it->path())) {
-         files.push_back(it->path());
-      }
-   }
-   if (ec) {
-      throw std::runtime_error("Failed while scanning dataset set: " + set_root.string());
-   }
-
-   std::sort(files.begin(), files.end());
-   for (const fs::path& file : files) {
-      RunConfig cfg;
-      cfg.sense = sense;
-      cfg.scale = scale;
-      cfg.instance_path = file.string();
-      cfg.best_known_arg = best_known_arg;
-      cfg.base_seed = base_seed + static_cast<uint64_t>(configs.size()) * 0x9E3779B97F4A7C15ULL;
-      cfg.num_runs = num_runs;
-      cfg.report_csv = report_csv;
-      configs.push_back(cfg);
-   }
-}
-
-static int run_batch(
-   const std::string& dataset_dir,
-   const std::string& best_known_arg,
-   uint64_t base_seed,
-   int num_runs,
-   const std::string& report_csv
-) {
-   if (num_runs <= 0) {
-      throw std::runtime_error("Number of runs must be positive.");
-   }
-
-   std::vector<RunConfig> configs;
-   append_batch_configs(configs, dataset_dir, "MDP", ObjectiveSense::Max, PrintScale::Half, best_known_arg, base_seed, num_runs, report_csv);
-   append_batch_configs(configs, dataset_dir, "MCP", ObjectiveSense::Max, PrintScale::Full, best_known_arg, base_seed, num_runs, report_csv);
-   append_batch_configs(configs, dataset_dir, "GBP", ObjectiveSense::Min, PrintScale::Full, best_known_arg, base_seed, num_runs, report_csv);
-
-   if (configs.empty()) {
-      throw std::runtime_error("No .qsc or .txt instances were found under: " + dataset_dir);
-   }
-
-   std::cout << "Batch mode: " << configs.size() << " instances\n";
-   std::cout << "Dataset folder: " << dataset_dir << "\n";
-   std::cout << "Best-known CSV: " << best_known_arg << "\n";
-   std::cout << "Summary file: " << report_csv << "\n";
-
-   int failures = 0;
-   for (size_t idx = 0; idx < configs.size(); ++idx) {
-      std::cout << "\n=== Instance " << (idx + 1) << "/" << configs.size() << " ===\n";
-      try {
-         run_single_instance(configs[idx]);
-      }
-      catch (const std::exception& e) {
-         ++failures;
-         std::cerr << "ERROR: failed instance " << configs[idx].instance_path << ": " << e.what() << "\n";
-      }
-   }
-
-   if (failures > 0) {
-      std::cerr << "Batch completed with " << failures << " failed instance(s).\n";
-      return 1;
-   }
-
-   std::cout << "Batch completed successfully.\n";
-   return 0;
-}
-
-static void print_usage(const char* exe) {
-   std::cerr << "Usage:\n"
-             << "  " << exe << "\n"
-             << "  " << exe << " batch [dataset_dir] [best_known_results.csv] [base_seed] [runs] [report.csv]\n"
-             << "  " << exe << " <max|min> <full|half> <instance.qsc_or_txt> [best_known_results.csv_or_folder] [base_seed] [runs] [report.csv]\n\n"
-             << "Default batch settings: MDP=max half, MCP=max full, GBP=min full.\n"
-             << "If [report.csv] is omitted, FCBQP_10runs_summary.csv is written to the same directory as the Slurm .out log file when possible.\n";
 }
 
 int main(int argc, char* argv[]) {
    try {
-      if (argc == 1 || (argc >= 2 && std::string(argv[1]) == "batch")) {
-         const int offset = (argc >= 2 && std::string(argv[1]) == "batch") ? 1 : 0;
-         const std::string dataset_dir = (argc >= offset + 2 ? std::string(argv[offset + 1]) : "dataset");
-         const std::string best_known_arg = (argc >= offset + 3 ? std::string(argv[offset + 2]) : "best_known_results.csv");
-         const uint64_t base_seed = (argc >= offset + 4 ? std::stoull(argv[offset + 3]) : 1ULL);
-         const int num_runs = (argc >= offset + 5 ? std::stoi(argv[offset + 4]) : 10);
-         const std::string report_csv = (argc >= offset + 6 ? std::string(argv[offset + 5]) : default_report_csv_path());
-         return run_batch(dataset_dir, best_known_arg, base_seed, num_runs, report_csv);
-      }
-
       if (argc < 4) {
-         print_usage(argv[0]);
+         std::cerr << "Usage: " << argv[0]
+            << " <max|min> <full|half> <instance.qsc> [best_known_results.csv_or_folder] [base_seed] [runs] \n";
          return 1;
       }
 
-      RunConfig cfg;
-      cfg.sense = parse_objective_sense(argv[1]);
-      cfg.scale = parse_print_scale(argv[2]);
-      cfg.instance_path = argv[3];
-      cfg.best_known_arg = (argc >= 5 ? std::string(argv[4]) : "best_known_results.csv");
-      cfg.base_seed = (argc >= 6 ? std::stoull(argv[5]) : 1ULL);
-      cfg.num_runs = (argc >= 7 ? std::stoi(argv[6]) : 10);
-      cfg.report_csv = (argc >= 8 ? std::string(argv[7]) : default_report_csv_path());
-      return run_single_instance(cfg);
+      const ObjectiveSense sense = parse_objective_sense(argv[1]);
+      const PrintScale scale = parse_print_scale(argv[2]);
+      const std::string instance_path = argv[3];
+      const std::string best_known_arg = (argc >= 5 ? std::string(argv[4]) : std::string());
+      const uint64_t base_seed = (argc >= 6 ? std::stoull(argv[5]) : 1ULL);
+      const int num_runs = (argc >= 7 ? std::stoi(argv[6]) : 10);
+
+      if (num_runs <= 0) {
+         throw std::runtime_error("Number of runs must be positive.");
+      }
+
+      Instance ins = read_qsc(instance_path, sense);
+      const std::string best_known_path = resolve_best_known_objective_path(instance_path, best_known_arg);
+      BestKnownObjective best_known;
+      if (!best_known_path.empty()) {
+         best_known = read_best_known_objective_file(best_known_path, instance_path);
+      }
+
+      Params par;
+      par.num_starts = 200000;
+      par.v_0_frac = 0.40;
+      if (ins.n <= 7000) {
+         par.T_max = 10000;
+      }
+      else {
+         par.T_max = 20000;
+      }
+      if (ins.n <= 500) {
+         par.t_alpha = 3;
+      }
+      else if (ins.n <= 2000) {
+         par.t_alpha = 5;
+      }
+      else if (ins.n <= 5000) {
+         par.t_alpha = 7;
+      }
+      else if (ins.n <= 8000) {
+         par.t_alpha = 9;
+      }
+      else if (ins.n <= 20000) {
+         par.t_alpha = 15;
+      }
+      else {
+         par.t_alpha = std::max(1, static_cast<int>(0.2 * sqrt(std::min(ins.k, ins.n - ins.k))));
+      }
+      if (ins.n <= 7000) {
+         par.v_1 = std::min(std::max(80, int(ins.k / 3)), 100);
+         par.v_2 = std::min(std::max(120, int((ins.n - ins.k) / 12)), 200);
+      }
+      else {
+         par.v_1 = std::min(std::max(80, int(ins.k / 3)), 300);
+         par.v_2 = std::min(std::max(120, int((ins.n - ins.k) / 12)), 300);
+      }
+
+      par.time_limit_seconds = 600.0;
+
+      const std::vector<double> impact = interaction_impact(ins);
+      const std::vector<int> C1 = build_set(ins, par, impact);
+
+      std::vector<double> run_output_objs;
+      run_output_objs.reserve(num_runs);
+      std::vector<double> reached_tts;
+      reached_tts.reserve(num_runs);
+
+      double best_output_obj = (sense == ObjectiveSense::Max)
+         ? -std::numeric_limits<double>::infinity()
+         : std::numeric_limits<double>::infinity();
+      Result best_run_res;
+      best_run_res.best_obj = std::numeric_limits<double>::infinity();
+
+      std::cout << "Instance: " << instance_path << "\n";
+      std::cout << "Sense: " << objective_sense_name(sense) << "\n";
+      std::cout << "Scale: " << print_scale_name(scale) << "\n";
+      std::cout << "Runs: " << num_runs << "\n";
+
+      if (best_known.loaded) {
+         std::cout << "Best-known objective = " << std::fixed << std::setprecision(9) << best_known.objective << "\n";
+      }
+      else {
+         std::cout << "Best-known objective file = not found or no matching instance\n";
+      }
+
+      for (int run = 1; run <= num_runs; ++run) {
+         auto t0 = std::chrono::steady_clock::now();
+
+         Result global_res;
+         global_res.best_obj = std::numeric_limits<double>::infinity();
+         bool run_reached_target = false;
+         double run_time_to_target = std::numeric_limits<double>::infinity();
+         std::vector<EliteSol> global_elite_pool;
+         std::vector<int> global_elite_ones_count(ins.n, 0);
+         std::atomic<bool> stop_requested(false);
+
+#pragma omp parallel
+         {
+            const int tid = omp_get_thread_num();
+            const int num_threads = omp_get_num_threads();
+
+            Params local_par = par;
+            const int base = par.num_starts / num_threads;
+            const int extra = par.num_starts % num_threads;
+
+            local_par.num_starts = base + (tid < extra ? 1 : 0);
+
+            const uint64_t run_seed = base_seed
+               + 0xD1B54A32D192ED03ULL * static_cast<uint64_t>(run)
+               + 0x9E3779B97F4A7C15ULL * static_cast<uint64_t>(tid + 1);
+
+            Result local_res = main_block(
+               ins,
+               local_par,
+               run_seed,
+               global_elite_pool,
+               global_elite_ones_count,
+               C1,
+               t0,
+               sense,
+               scale,
+               best_known,
+               stop_requested
+            );
+
+            const bool local_reached_target = local_res.reached_target && std::isfinite(local_res.time_to_target);
+
+            const double local_time_to_target = local_res.time_to_target;
+
+#pragma omp critical
+            {
+               if (local_reached_target && (!run_reached_target || local_time_to_target < run_time_to_target)) {
+                  run_reached_target = true;
+                  run_time_to_target = local_time_to_target;
+               }
+
+               if (local_res.best_obj < global_res.best_obj) {
+                  global_res = std::move(local_res);
+               }
+            }
+         }
+         if (run_reached_target) {
+            global_res.reached_target = true;
+            global_res.time_to_target = run_time_to_target;
+         }
+         else {
+            global_res.reached_target = false;
+            global_res.time_to_target = std::numeric_limits<double>::quiet_NaN();
+         }
+         auto t1 = std::chrono::steady_clock::now();
+         const double elapsed = std::chrono::duration<double>(t1 - t0).count();
+         const double output_obj = output_objective_from_internal(global_res.best_obj, sense, scale);
+         const bool reached_best_known = best_known.loaded && target_reached(output_obj, best_known.objective, sense);
+
+         run_output_objs.push_back(output_obj);
+         if (global_res.reached_target && std::isfinite(global_res.time_to_target)) {
+            reached_tts.push_back(global_res.time_to_target);
+         }
+
+         const bool improves_best = (sense == ObjectiveSense::Max)
+            ? (output_obj > best_output_obj + 1e-6)
+            : (output_obj < best_output_obj - 1e-6);
+         if (improves_best) {
+            best_output_obj = output_obj;
+            best_run_res = global_res;
+         }
+
+         std::cout << "Run " << run << "/" << num_runs
+            << ": best objective = " << std::fixed << std::setprecision(9) << output_obj
+            << ", reached best-known = " << (reached_best_known ? "YES" : "NO");
+
+         if (global_res.reached_target) {
+            std::cout << ", TTS to best-known (s) = "
+               << std::fixed << std::setprecision(6) << global_res.time_to_target;
+         }
+         else {
+            std::cout << ", TTS to best-known (s) = unknown";
+         }
+
+         std::cout << ", time to run-best (s) = "
+            << std::fixed << std::setprecision(6) << global_res.time_to_best
+            << ", runtime (s) = "
+            << std::fixed << std::setprecision(6) << elapsed
+            << "\n";
+      }
+
+      double sum_obj = 0.0;
+      for (double v : run_output_objs) sum_obj += v;
+      const double average_obj = sum_obj / static_cast<double>(run_output_objs.size());
+
+      const int reached_count = static_cast<int>(reached_tts.size());
+      std::string average_tts_str = "unknown";
+      double average_tts = 0.0;
+      if (reached_count > 0) {
+         double sum_tts = 0.0;
+         for (double v : reached_tts) sum_tts += v;
+         average_tts = sum_tts / static_cast<double>(reached_count);
+         std::ostringstream oss;
+         oss << std::fixed << std::setprecision(6) << average_tts;
+         average_tts_str = oss.str();
+      }
+
+      std::string best_known_str = "";
+      if (best_known.loaded) {
+         std::ostringstream oss;
+         oss << std::fixed << std::setprecision(9) << best_known.objective;
+         best_known_str = oss.str();
+      }
+
+      const std::string instance_name = basename_without_extension(instance_path);
+
+      std::cout << "\nSummary over " << num_runs << " runs\n";
+      std::cout << "Instance name = " << instance_name << "\n";
+      std::cout << "Best-known obj from CSV = " << (best_known.loaded ? best_known_str : "") << "\n";
+      std::cout << "Runtime limit: " << static_cast<int>(par.time_limit_seconds) << " seconds \n";
+      std::cout << "Best found obj = " << std::fixed << std::setprecision(9) << best_output_obj << "\n";
+      std::cout << "Average obj = " << std::fixed << std::setprecision(9) << average_obj << "\n";
+      std::cout << "Average TTS = " << average_tts_str << "\n";
+      std::cout << "Times reaching best-known = " << reached_count << "\n";
+
+      if (!best_run_res.best_x.empty()) {
+         double recomputed_obj = objective_x(best_run_res.best_x, ins);
+         double diff = recomputed_obj - best_run_res.best_obj;
+         if (std::abs(diff) > 1e-5) {
+            std::cout << "Wrong obj value !!\n";
+         }
+
+         std::cout << "Selected vars of best run: ";
+         for (int i = 0; i < ins.n; i++) {
+            if (best_run_res.best_x[i] == 1) {
+               std::cout << (i + 1) << " ";
+            }
+         }
+         std::cout << "\n";
+      }
+
+      return 0;
    }
    catch (const std::exception& e) {
       std::cerr << "ERROR: " << e.what() << "\n";
