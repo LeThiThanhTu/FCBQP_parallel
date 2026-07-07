@@ -99,23 +99,6 @@ static inline bool time_limit_reached(
    return elapsed >= time_limit_seconds;
 }
 
-static inline bool stop_run(
-   const std::chrono::steady_clock::time_point& t_start,
-   const Params& par,
-   std::atomic<bool>& stop_requested
-) {
-   if (stop_requested.load(std::memory_order_relaxed)) {
-      return true;
-   }
-
-   if (time_limit_reached(t_start, par.time_limit_seconds)) {
-      stop_requested.store(true, std::memory_order_relaxed);
-      return true;
-   }
-
-   return false;
-}
-
 static std::string basename_without_extension(const std::string& path) {
    size_t slash = path.find_last_of("/\\");
    std::string name = (slash == std::string::npos) ? path : path.substr(slash + 1);
@@ -424,8 +407,8 @@ Instance read_qsc(const std::string& filename, ObjectiveSense sense) {
       throw std::runtime_error("Invalid n: must be nonnegative.");
    }
 
-   if (ins.k < 0 || ins.k > ins.n) {
-      throw std::runtime_error("Invalid k: must satisfy 0 <= k <= n.");
+   if (ins.k < 2 || ins.k > ins.n - 1) {
+      throw std::runtime_error("Invalid k: must satisfy 2 <= k <= n - 1.");
    }
 
    if (declared_num_entries < -1) {
@@ -672,7 +655,7 @@ std::vector<double> interaction_impact(const Instance& ins) {
 
    const double scale = (n > 1) ? (2.0 * static_cast<double>(ins.k - 1) / static_cast<double>(n - 1)) : 0.0;
 
-   #pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static)
    for (int i = 0; i < n; ++i) {
       double diag = 0.0;
       double off_sum = 0.0;
@@ -903,10 +886,12 @@ void tabu_search(
 
    std::vector<double> h = compute_h_x(x, ins);
    std::vector<int> tabu_until(n, -1);
+
    std::vector<int> ones;
    std::vector<int> zeros;
    std::vector<int> pos_in_ones(n, -1);
    std::vector<int> pos_in_zeros(n, -1);
+
    ones.reserve(k);
    zeros.reserve(n - k);
 
@@ -937,6 +922,7 @@ void tabu_search(
 
    std::vector<int> best_x = x;
    double best_obj = obj;
+
    auto record_target_if_reached = [&](double candidate_internal_obj) {
       if (!best_known.loaded || res.reached_target) {
          return;
@@ -956,19 +942,27 @@ void tabu_search(
       };
 
    record_target_if_reached(best_obj);
+
+   if (stop_requested.load(std::memory_order_relaxed)) {
+      return;
+   }
+
    std::vector<int> cand_out;
    std::vector<int> cand_in;
    cand_out.reserve(n);
    cand_in.reserve(n);
    int no_improve_tabu = 0;
+
    for (int iter = 0; iter < par.T_max; ++iter) {
-      if (stop_run(t_start, par, stop_requested)) {
+      if (ones.empty() || zeros.empty()) {
          break;
       }
-      if (ones.empty() || zeros.empty()) break;
+
       cand_out = ones;
       cand_in = zeros;
+
       const int num_cand_out = std::min(par.v_1, static_cast<int>(cand_out.size()));
+
       const int num_cand_in = std::min(par.v_2, static_cast<int>(cand_in.size()));
 
       if (num_cand_out < static_cast<int>(cand_out.size())) {
@@ -994,23 +988,26 @@ void tabu_search(
          );
       }
       cand_in.resize(num_cand_in);
+
       int best_i = -1;
       int best_j = -1;
       double best_delta = std::numeric_limits<double>::infinity();
 
       for (int i : cand_out) {
          for (int j : cand_in) {
-            const double delta =
-               2.0 * (h[j] - h[i])
-               + Qat(ins, i, i)
-               + Qat(ins, j, j)
-               - 2.0 * Qat(ins, i, j);
+            const double delta = 2.0 * (h[j] - h[i]) + Qat(ins, i, i) + Qat(ins, j, j) - 2.0 * Qat(ins, i, j);
 
             const double new_obj = obj + delta;
-            const bool is_tabu = (iter <= tabu_until[i] || iter <= tabu_until[j]);
-            const bool aspiration = (new_obj < best_obj - 1e-6);
 
-            if (is_tabu && !aspiration) continue;
+            const bool is_tabu =
+               (iter <= tabu_until[i] || iter <= tabu_until[j]);
+
+            const bool aspiration =
+               (new_obj < best_obj - 1e-6);
+
+            if (is_tabu && !aspiration) {
+               continue;
+            }
 
             if (delta < best_delta) {
                best_delta = delta;
@@ -1023,12 +1020,7 @@ void tabu_search(
       if (best_i < 0 || best_j < 0) {
          for (int i : cand_out) {
             for (int j : cand_in) {
-               const double delta =
-                  2.0 * (h[j] - h[i])
-                  + Qat(ins, i, i)
-                  + Qat(ins, j, j)
-                  - 2.0 * Qat(ins, i, j);
-
+               const double delta = 2.0 * (h[j] - h[i]) + Qat(ins, i, i) + Qat(ins, j, j) - 2.0 * Qat(ins, i, j);
                if (delta < best_delta) {
                   best_delta = delta;
                   best_i = i;
@@ -1038,7 +1030,9 @@ void tabu_search(
          }
       }
 
-      if (best_i < 0 || best_j < 0) break;
+      if (best_i < 0 || best_j < 0) {
+         break;
+      }
 
       x[best_i] = 0;
       x[best_j] = 1;
@@ -1049,6 +1043,7 @@ void tabu_search(
 
       remove_from_vec(ones, pos_in_ones, best_i);
       add_to_vec(zeros, pos_in_zeros, best_i);
+
       remove_from_vec(zeros, pos_in_zeros, best_j);
       add_to_vec(ones, pos_in_ones, best_j);
 
@@ -1059,7 +1054,7 @@ void tabu_search(
 
          record_target_if_reached(best_obj);
 
-         if (res.reached_target) {
+         if (stop_requested.load(std::memory_order_relaxed)) {
             break;
          }
       }
@@ -1079,7 +1074,6 @@ void tabu_search(
 
    x = best_x;
    obj = best_obj;
-
 }
 
 std::vector<int> path_relink_one_direction(
@@ -1180,13 +1174,18 @@ std::vector<int> path_relink_one_direction(
          break;
       }
 
-      std::sort(moves.begin(), moves.end(),
-         [](const Move& a, const Move& b) {
-            return a.delta < b.delta;
-         }
-      );
-
       const int R = std::min<int>(10, static_cast<int>(moves.size()));
+      if (R < static_cast<int>(moves.size())) {
+         std::nth_element(
+            moves.begin(),
+            moves.begin() + R,
+            moves.end(),
+            [](const Move& a, const Move& b) {
+               return a.delta < b.delta;
+            }
+         );
+      }
+
       std::uniform_int_distribution<int> pick(0, R - 1);
       const Move mv = moves[pick(rng)];
 
@@ -1256,8 +1255,7 @@ std::vector<int> path_relinking(
    double worst_elite_obj = elite_pool.back().obj;
 
 
-   const double obj_denom =
-      std::max(1e-6, worst_elite_obj - best_elite_obj);
+   const double obj_denom =  std::max(1e-6, worst_elite_obj - best_elite_obj);
 
    int guide_idx = -1;
    int best_dist = -1;
@@ -1276,12 +1274,7 @@ std::vector<int> path_relinking(
 
       const double quality_score = (worst_elite_obj - elite_pool[e].obj) / obj_denom;
 
-      const int max_possible_dist = 2 * std::min(ins.k, ins.n - ins.k);
-
-      const double distance_score =
-         (max_possible_dist > 0)
-         ? static_cast<double>(d) / static_cast<double>(max_possible_dist)
-         : 0.0;
+      const double distance_score = static_cast<double>(d) / (2.0 * std::min(ins.k, ins.n - ins.k));
 
       const double score = quality_score + distance_score;
 
@@ -1319,22 +1312,17 @@ std::vector<int> path_relinking(
    if (!forward_changed && !backward_changed) {
       return x_current;
    }
-
    if (forward_changed && !backward_changed) {
       return best_forward;
    }
-
    if (!forward_changed && backward_changed) {
       return best_backward;
    }
-
    const double obj_forward = objective_x(best_forward, ins);
    const double obj_backward = objective_x(best_backward, ins);
-
    if (obj_forward <= obj_backward) {
       return best_forward;
    }
-
    return best_backward;
 }
 
@@ -1401,13 +1389,18 @@ std::vector<int> random_greedy_construction(
             throw std::runtime_error("random_greedy_construction: no free variable left.");
          }
 
-         std::sort(moves.begin(), moves.end(),
-            [](const AddMove& a, const AddMove& b) {
-               return a.gain < b.gain;
-            }
-         );
-
          int R = std::min(20, static_cast<int>(moves.size()));
+         if (R < static_cast<int>(moves.size())) {
+            std::nth_element(
+               moves.begin(),
+               moves.begin() + R,
+               moves.end(),
+               [](const AddMove& a, const AddMove& b) {
+                  return a.gain < b.gain;
+               }
+            );
+         }
+
          std::uniform_int_distribution<int> pick(0, R - 1);
 
          int best_i = moves[pick(rng)].i;
@@ -1466,7 +1459,6 @@ std::vector<int> elite_based_restart(
       if (static_cast<int>(e.x.size()) != n) {
          throw std::runtime_error("elite_based_restart: invalid elite solution size.");
       }
-
       for (int i = 0; i < n; ++i) {
          if (e.x[i]) {
             ++elite_freq[i];
@@ -1527,7 +1519,6 @@ std::vector<int> elite_based_restart(
 
    for (int attempt = 0; attempt < max_attempts; ++attempt) {
       std::vector<int> x(n, 0);
-
       for (int i : fixed_ones) {
          x[i] = 1;
       }
@@ -1577,7 +1568,6 @@ std::vector<int> random_diverse_restart(
 
    for (int attempt = 0; attempt < max_attempts; ++attempt) {
       std::shuffle(idx.begin(), idx.end(), rng);
-
       std::vector<int> x(n, 0);
       for (int t = 0; t < k; ++t) {
          x[idx[t]] = 1;
@@ -1625,11 +1615,9 @@ Result main_block(
    std::vector<int> incumbent_for_guide;
    std::vector<EliteSol> elite_snapshot;
    for (int start = 0; start < par.num_starts; ++start) {
-      if (stop_run(t_start, par, stop_requested)) break;
+
       std::vector<int> x;
-
       std::vector<int> elite_count_snapshot;
-
       #pragma omp critical
       {
          elite_snapshot = global_elite_pool;
@@ -1662,13 +1650,19 @@ Result main_block(
          }
 
       }
-
       double obj = objective_x(x, ins);
       tabu_search(x, ins, obj, par, t_start, sense, scale, best_known, res, stop_requested);
 
+      const bool stop_after_tabu =  stop_requested.load(std::memory_order_relaxed) ||  time_limit_reached(t_start, par.time_limit_seconds);
+
+      if (stop_after_tabu) {
+         stop_requested.store(true, std::memory_order_relaxed);
+      }
+      else {
       #pragma omp critical
-      {
-         try_insert_elite(ins, global_elite_pool, global_elite_ones_count, x, obj, par);
+         {
+            try_insert_elite(ins, global_elite_pool, global_elite_ones_count, x, obj, par);
+         }
       }
 
       if (obj < res.best_obj) {
@@ -1693,6 +1687,10 @@ Result main_block(
       }
       else {
          ++no_improve;
+      }
+
+      if (stop_after_tabu) {
+         break;
       }
    }
 
@@ -1776,7 +1774,6 @@ int main(int argc, char* argv[]) {
          : std::numeric_limits<double>::infinity();
       Result best_run_res;
       best_run_res.best_obj = std::numeric_limits<double>::infinity();
-
       std::cout << "Sense: " << objective_sense_name(sense) << "\n";
       std::cout << "Scale: " << print_scale_name(scale) << "\n";
       std::cout << "Runs: " << num_runs << "\n";
@@ -1917,8 +1914,8 @@ int main(int argc, char* argv[]) {
       std::cout << "\nSummary over " << num_runs << " runs\n";
       std::cout << "Instance name = " << instance_name << "\n";
       std::cout << "Best-known obj from CSV = " << (best_known.loaded ? best_known_str : "") << "\n";
-      std::cout << "Runtime limit: " << static_cast<int>(par.time_limit_seconds) << " seconds \n";
       std::cout << "Best found obj = " << std::fixed << std::setprecision(9) << best_output_obj << "\n";
+      std::cout << "Runtime limit: " << static_cast<int>(par.time_limit_seconds) << " seconds \n";
       std::cout << "Average obj = " << std::fixed << std::setprecision(9) << average_obj << "\n";
       std::cout << "Average TTS = " << average_tts_str << "\n";
       std::cout << "Times reaching best-known = " << reached_count << "\n";
