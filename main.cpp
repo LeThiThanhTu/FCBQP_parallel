@@ -331,7 +331,7 @@ static BestKnownObjective read_best_known_objective_file(
    return e;
 }
 
-Instance read_qsc(const std::string& filename, ObjectiveSense sense) {
+Instance read_instance(const std::string& filename, ObjectiveSense sense) {
    std::ifstream in(filename);
    if (!in) {
       throw std::runtime_error("Cannot open file: " + filename);
@@ -345,7 +345,7 @@ Instance read_qsc(const std::string& filename, ObjectiveSense sense) {
       lines.push_back(line);
    }
    if (lines.empty()) {
-      throw std::runtime_error("QSC file has no non-comment lines.");
+      throw std::runtime_error("File has no non-comment lines.");
    }
    struct Entry {
       int i, j;
@@ -365,7 +365,7 @@ Instance read_qsc(const std::string& filename, ObjectiveSense sense) {
    }
    if (first_tokens.size() == 1) {
       if (lines.size() < 2) {
-         throw std::runtime_error("Type 2 QSC file needs at least two header lines.");
+         throw std::runtime_error("Type 2 data file needs at least two header lines.");
       }
       {
          std::istringstream iss(lines[0]);
@@ -471,8 +471,7 @@ Instance read_qsc(const std::string& filename, ObjectiveSense sense) {
          }
          else {
             shift = 1;
-            std::cerr << "WARNING: indexing is ambiguous because all indices lie in both "
-               << "[0,n-1] and [1,n]. Assuming 1-based indexing.\n";
+            std::cerr << "WARNING: indexing is ambiguous ";
          }
       }
       else {
@@ -493,7 +492,7 @@ Instance read_qsc(const std::string& filename, ObjectiveSense sense) {
 
       if (i < 0 || i >= ins.n || j < 0 || j >= ins.n) {
          std::ostringstream oss;
-         oss << "Index out of range while reading QSC file. "
+         oss << "Index out of range while reading file. "
             << "Original entry: (" << e.i << ", " << e.j << "), "
             << "after shift: (" << i << ", " << j << "), "
             << "n = " << ins.n << ".";
@@ -1716,7 +1715,7 @@ int main(int argc, char* argv[]) {
          throw std::runtime_error("Number of runs must be positive.");
       }
 
-      Instance ins = read_qsc(instance_path, sense);
+      Instance ins = read_instance(instance_path, sense);
       const std::string best_known_path = resolve_best_known_objective_path(instance_path, best_known_arg);
       BestKnownObjective best_known;
       if (!best_known_path.empty()) {
