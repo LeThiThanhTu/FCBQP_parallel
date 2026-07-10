@@ -2,9 +2,11 @@
 
 This repository contains the implementation of the algorithm described in the paper
 
-*A Parallel Heuristic for the Fixed-Cardinality Binary Quadratic Program* (Thi Thanh Tu Le and Thorsten Koch).
+*A Parallel Heuristic for the Fixed Cardinality Binary Quadratic Program* (Thi Thanh Tu Le and Thorsten Koch).
 
 The main implementation is in `main.cpp`.
+
+The best-known/reference results are stored in `best_known_results.csv`.
 
 The detailed computational results mentioned in the paper are provided in `summary_results.xlsx`.
 
@@ -29,7 +31,7 @@ The benchmark instances are stored in the `dataset` directory. The collection co
 
 ## Requirements
 
-- A modern C++17 compiler with standard `<filesystem>` support
+- A C++17 compiler with standard `<filesystem>` support
 - OpenMP
 - CMake 3.10 or newer
 - GNU Make
@@ -55,12 +57,18 @@ The default settings for the benchmark instances are:
 
 The best-known objective file is `best_known_results.csv`.
 
-## Run One Instance
+## Run
 
 From the repository root:
 
 ```bash
 ./build/main <max|min> <full|half> <instance.qsc_or_txt> [best_known_results.csv_or_folder] [base_seed] [runs]
+```
+
+or simply
+
+```bash
+./build/main <max|min> <full|half> <instance.qsc_or_txt> [best_known_results.csv_or_folder]
 ```
 
 For example:
