@@ -41,10 +41,20 @@ The benchmark instances are stored in the `dataset` directory. The collection co
 From the repository root:
 
 ```bash
-mkdir -p build
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j
+make
+```
+
+The `Makefile` wraps the CMake build. To select a compiler or build directory:
+
+```bash
+make CXX=g++-15 BUILD_DIR=build-gcc JOBS=8
+```
+
+The equivalent direct CMake commands remain available:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
 ```
 
 The default settings for the benchmark instances are:
@@ -62,7 +72,7 @@ The best-known objective file is `best_known_results.csv`.
 From the repository root:
 
 ```bash
-./build/main <max|min> <full|half> <instance.qsc_or_txt> [best_known_results.csv_or_folder] [base_seed] [runs]
+./build/main <max|min> <full|half> <instance.qsc_or_txt> [best_known_results.csv_or_folder] [base_seed] [runs] [time_limit_seconds] [index_base]
 ```
 
 or simply
@@ -76,3 +86,37 @@ For example:
 ```bash
 ./build/main max half dataset/MDP/LA/LA_n2000_m100.qsc best_known_results.csv
 ```
+
+`time_limit_seconds` defaults to 600; zero disables the limit. `index_base` can
+be `auto`, `0`, or `1`. If the indices are compatible with both conventions,
+the program rejects the ambiguous input unless `0` or `1` is supplied.
+
+Matrix data may contain one triangle of a symmetric matrix or both symmetric
+entries. When both `(i,j)` and `(j,i)` are present, their values must agree;
+they are counted once rather than doubled.
+
+Cardinalities from `0` through `n` are accepted. The trivial cases `k=0`,
+`k=1`, and `k=n` are solved directly.
+
+On macOS, CMake automatically checks the standard Homebrew locations for
+`libomp` when Apple Clang cannot discover OpenMP itself.
+
+## Reproducible smoke benchmark
+
+The ten-instance benchmark covers MDP, MCP, and GBP instances using four
+threads and one fixed-seed run per instance:
+
+```bash
+make benchmark
+```
+
+Raw logs and a CSV summary are written under `benchmark_results/`.
+
+Benchmark settings can be overridden without editing files:
+
+```bash
+make benchmark BENCHMARK_PHASE=trial BENCHMARK_THREADS=8 SOLVER_TIME_LIMIT=60 BENCHMARK_TIMEOUT=75
+```
+
+Run the regression tests with `make test` and list all Make targets with
+`make help`.

@@ -1,0 +1,11 @@
+instance,path,sense,scale,status,returncode,storage,best_known,best_found,reached_best_known,tts_seconds,solver_runtime_seconds,wall_seconds
+mdp-gkd-c-500,dataset/MDP/GKD-c/GKD-c_1_n500_m50.txt,max,half,completed,0,dense matrix,19485.186970000,19485.186970000,YES,0.000247,0.000282,0.080300
+mdp-mdg-b-500,dataset/MDP/MDG-b_n500/MDG-b_1_n500_m50.txt,max,half,completed,0,dense matrix,778030.570000000,778030.570000000,YES,0.005136,0.005170,0.081813
+mdp-som-b-500,dataset/MDP/SOM-b/SOM-b_17_n500_m50.txt,max,half,completed,0,dense matrix,7141.000000000,7141.000000000,YES,0.020871,0.020905,0.093815
+mdp-mdg-a-2000,dataset/MDP/MDG-a_n2000/MDG-a_21_n2000_m200.txt,max,half,completed,0,dense matrix,114271.000000000,114271.000000000,YES,3.222328,3.222373,4.280759
+mcp-c125-9,dataset/MCP/DIMACS/C125.9_m34.qsc,max,full,completed,0,dense matrix,1122.000000000,1122.000000000,YES,0.000105,0.000114,0.013156
+mcp-hamming8-4,dataset/MCP/DIMACS/hamming8-4_m16.qsc,max,full,completed,0,dense matrix,240.000000000,240.000000000,YES,0.000090,0.000103,0.020000
+mcp-jazz,dataset/MCP/set_1/jazz_n198_m30.qsc,max,full,completed,0,dense matrix,870.000000000,870.000000000,YES,0.000091,0.000103,0.010003
+mcp-email,dataset/MCP/set_1/email_n1133_m12.qsc,max,full,completed,0,dense matrix,132.000000000,132.000000000,YES,0.002300,0.002311,0.014681
+mcp-ca-grqc,dataset/MCP/set_1/ca-GrQc_n5241_m44.qsc,max,full,completed,0,CSR sparse,1892.000000000,1892.000000000,YES,0.000490,0.000513,0.017946
+gbp-crack,dataset/GBP/crack.graph.qsc,min,full,completed,0,CSR sparse,184.000000000,184.000000000,YES,19.383633,19.383913,19.415319
