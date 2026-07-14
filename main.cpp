@@ -1,16 +1,19 @@
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
+#include <execution>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
-#include <memory>
 #include <numeric>
 #include <optional>
 #include <random>
@@ -19,7 +22,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <omp.h>
 
 struct Instance {
    int n = 0;
@@ -31,6 +33,7 @@ struct Instance {
    std::vector<int> row_ptr;
    std::vector<int> col_ind;
    std::vector<double> val;
+   std::vector<double> diagonal;
 };
 
 static constexpr double SPARSE_DENSITY_THRESHOLD = 0.002;
@@ -63,6 +66,7 @@ struct Params {
    int t_alpha = 15;
    int v_1 = 40;
    int v_2 = 40;
+   int epoch_lanes_per_worker = 4;
    double d_frac = 0.2;
    double time_limit_seconds = 600.0;
 };
@@ -72,6 +76,8 @@ struct Result {
    double best_obj = std::numeric_limits<double>::infinity();
    double time_to_best = 0.0;
    double time_to_target = std::numeric_limits<double>::quiet_NaN();
+   int start_to_best = 0;
+   int target_epoch = 0;
    bool reached_target = false;
 };
 
@@ -85,21 +91,8 @@ struct EliteSol {
 struct EliteState {
    std::vector<EliteSol> pool;
    std::vector<int> ones_count;
+   std::vector<int> construction_candidates;
 };
-
-struct SharedElite {
-   std::vector<EliteSol> pool;
-   std::vector<int> ones_count;
-   std::shared_ptr<const EliteState> snapshot;
-};
-
-void publish_elite_snapshot(SharedElite& shared) {
-   auto next = std::make_shared<EliteState>();
-   next->pool = shared.pool;
-   next->ones_count = shared.ones_count;
-   std::shared_ptr<const EliteState> immutable = std::move(next);
-   std::atomic_store_explicit(&shared.snapshot, std::move(immutable), std::memory_order_release);
-}
 
 static inline std::string trim(const std::string& s) {
    const size_t a = s.find_first_not_of(" \t\r\n");
@@ -108,9 +101,31 @@ static inline std::string trim(const std::string& s) {
    return s.substr(a, b - a + 1);
 }
 
-static inline bool starts_with_hash(const std::string& s) {
-   std::string t = trim(s);
-   return !t.empty() && t[0] == '#';
+static inline void skip_ascii_space(const char*& cursor, const char* end) {
+   while (cursor != end && (*cursor == ' ' || *cursor == '\t' || *cursor == '\r')) ++cursor;
+}
+
+static bool parse_int_field(const char*& cursor, const char* end, int& value) {
+   skip_ascii_space(cursor, end);
+   const std::from_chars_result parsed = std::from_chars(cursor, end, value);
+   if (parsed.ec != std::errc()) return false;
+   cursor = parsed.ptr;
+   return true;
+}
+
+static bool parse_matrix_entry(const std::string& line, int& i, int& j, double& value) {
+   const char* cursor = line.data();
+   const char* end = cursor + line.size();
+   if (!parse_int_field(cursor, end, i) || !parse_int_field(cursor, end, j)) return false;
+   skip_ascii_space(cursor, end);
+   if (cursor == end) return false;
+
+   char* value_end = nullptr;
+   value = std::strtod(cursor, &value_end);
+   if (value_end == cursor) return false;
+   cursor = value_end;
+   skip_ascii_space(cursor, end);
+   return cursor == end;
 }
 
 static inline bool time_limit_reached(
@@ -135,6 +150,96 @@ struct SearchControl {
       return true;
    }
 };
+
+int parse_worker_count(const char* text, const char* source) {
+   if (text == nullptr || *text == '\0') {
+      throw std::runtime_error(std::string(source) + " must be a positive integer.");
+   }
+   char* end = nullptr;
+   const long value = std::strtol(text, &end, 10);
+   if (end == text || *end != '\0' || value <= 0 || value > std::numeric_limits<int>::max()) {
+      throw std::runtime_error(std::string(source) + " must be a positive integer.");
+   }
+   return static_cast<int>(value);
+}
+
+int default_worker_count() {
+   if (const char* configured = std::getenv("FCBQP_NUM_THREADS")) {
+      return parse_worker_count(configured, "FCBQP_NUM_THREADS");
+   }
+   return 4;
+}
+
+const char* parallel_backend_name() {
+#if defined(_LIBCPP_PSTL_BACKEND_LIBDISPATCH)
+   return "C++20 PSTL/libdispatch";
+#elif defined(_PSTL_PAR_BACKEND_TBB)
+   return "C++20 PSTL/TBB";
+#elif defined(_PSTL_PAR_BACKEND_OPENMP)
+   return "C++20 PSTL/OpenMP";
+#elif defined(_PSTL_PAR_BACKEND_SERIAL)
+   return "C++20 PSTL/serial";
+#else
+   return "C++20 PSTL/compiler-default";
+#endif
+}
+
+template <class Function>
+void parallel_for_workers(int worker_count, Function&& function) {
+   if (worker_count <= 1) {
+      function(0);
+      return;
+   }
+
+   // Long-lived solver tasks need more input elements than workers: PSTL
+   // implementations are allowed to keep short ranges serial. Lightweight
+   // tickets expose enough parallelism, while the atomic claim ensures that
+   // exactly worker_count expensive tasks are executed.
+   constexpr size_t tickets_per_worker = 256;
+   const size_t ticket_count = std::max<size_t>(1024, static_cast<size_t>(worker_count) * tickets_per_worker);
+   static thread_local std::vector<unsigned char> tickets;
+   tickets.resize(ticket_count);
+   std::atomic<int> next_worker{ 0 };
+   std::for_each(std::execution::par, tickets.begin(), tickets.end(), [&](unsigned char) noexcept {
+      int worker_id = next_worker.load(std::memory_order_relaxed);
+      while (worker_id < worker_count &&
+         !next_worker.compare_exchange_weak(
+            worker_id,
+            worker_id + 1,
+            std::memory_order_relaxed,
+            std::memory_order_relaxed
+         )) {
+      }
+      if (worker_id < worker_count) function(worker_id);
+      });
+}
+
+using DeterministicRng = std::mt19937_64;
+
+uint64_t bounded_random(DeterministicRng& rng, uint64_t bound) {
+   if (bound == 0) {
+      throw std::logic_error("bounded_random requires a positive bound.");
+   }
+
+   // Rejection sampling maps the standardized mt19937_64 output to a bounded
+   // integer without depending on a standard-library distribution algorithm.
+   const uint64_t rejection_limit = (uint64_t{ 0 } - bound) % bound;
+   uint64_t value = 0;
+   do {
+      value = rng();
+   } while (value < rejection_limit);
+   return value % bound;
+}
+
+template <class RandomAccessIterator>
+void deterministic_shuffle(RandomAccessIterator first, RandomAccessIterator last, DeterministicRng& rng) {
+   using Difference = typename std::iterator_traits<RandomAccessIterator>::difference_type;
+   const Difference size = last - first;
+   for (Difference i = size; i > 1; --i) {
+      const Difference selected = static_cast<Difference>(bounded_random(rng, static_cast<uint64_t>(i)));
+      std::iter_swap(first + (i - 1), first + selected);
+   }
+}
 
 static std::string basename_without_extension(const std::string& path) {
    size_t slash = path.find_last_of("/\\");
@@ -384,7 +489,7 @@ Instance read_instance(
       while (std::getline(in, line)) {
          ++source_line;
          line = trim(line);
-         if (line.empty() || starts_with_hash(line)) continue;
+         if (line.empty() || line.front() == '#') continue;
          return true;
       }
       return false;
@@ -396,6 +501,11 @@ Instance read_instance(
 
    struct Entry {
       int i, j;
+      double v;
+   };
+   struct UndirectedEntry {
+      int a, b;
+      bool forward;
       double v;
    };
    Instance ins;
@@ -458,7 +568,7 @@ Instance read_instance(
       throw std::runtime_error("Invalid number_of_entries.");
    }
 
-   std::vector<Entry> entries;
+   std::vector<UndirectedEntry> entries;
    if (declared_num_entries > 0) {
       entries.reserve(static_cast<size_t>(declared_num_entries));
    }
@@ -467,24 +577,21 @@ Instance read_instance(
    int max_index = std::numeric_limits<int>::min();
 
    while (next_data_line()) {
-      std::istringstream iss(line);
-
       int i, j;
       double v;
 
-      if (!(iss >> i >> j >> v)) {
+      if (!parse_matrix_entry(line, i, j, v)) {
          throw std::runtime_error(
             "Invalid matrix entry on line " + std::to_string(source_line) + ": " + line
          );
       }
-      std::string trailing;
-      if (iss >> trailing) {
+      if (!std::isfinite(v)) {
          throw std::runtime_error(
-            "Unexpected trailing data on line " + std::to_string(source_line) + ": " + line
+            "Non-finite matrix value on line " + std::to_string(source_line) + "."
          );
       }
 
-      entries.push_back({ i, j, v });
+      entries.push_back({ i, j, false, v });
 
       min_index = std::min(min_index, std::min(i, j));
       max_index = std::max(max_index, std::max(i, j));
@@ -539,60 +646,55 @@ Instance read_instance(
       }
    }
 
-   struct UndirectedEntry {
-      int a, b;
-      bool forward;
-      double v;
-   };
-
-   std::vector<UndirectedEntry> undirected;
-   undirected.reserve(entries.size());
-
-   for (const auto& e : entries) {
-      const int i = e.i - shift;
-      const int j = e.j - shift;
+   for (auto& e : entries) {
+      const int raw_i = e.a;
+      const int raw_j = e.b;
+      const int i = raw_i - shift;
+      const int j = raw_j - shift;
 
       if (i < 0 || i >= ins.n || j < 0 || j >= ins.n) {
          std::ostringstream oss;
          oss << "Index out of range while reading file. "
-            << "Original entry: (" << e.i << ", " << e.j << "), "
+            << "Original entry: (" << raw_i << ", " << raw_j << "), "
             << "after shift: (" << i << ", " << j << "), "
             << "n = " << ins.n << ".";
          throw std::runtime_error(oss.str());
       }
 
-      const int a = std::min(i, j);
-      const int b = std::max(i, j);
-      undirected.push_back({ a, b, i <= j, e.v });
+      e.a = std::min(i, j);
+      e.b = std::max(i, j);
+      e.forward = (i <= j);
    }
 
-   entries.clear();
-   entries.shrink_to_fit();
-
-   std::sort(undirected.begin(), undirected.end(), [](const UndirectedEntry& lhs, const UndirectedEntry& rhs) {
+   const auto undirected_less = [](const UndirectedEntry& lhs, const UndirectedEntry& rhs) {
       if (lhs.a != rhs.a) return lhs.a < rhs.a;
       if (lhs.b != rhs.b) return lhs.b < rhs.b;
-      return lhs.forward < rhs.forward;
-      });
+      if (lhs.forward != rhs.forward) return lhs.forward < rhs.forward;
+      return lhs.v < rhs.v;
+      };
+   if (!std::is_sorted(entries.begin(), entries.end(), undirected_less)) {
+      std::sort(entries.begin(), entries.end(), undirected_less);
+   }
 
-   std::vector<Entry> nz;
-   nz.reserve(undirected.size() * 2);
+   std::vector<Entry> canonical;
+   canonical.reserve(entries.size());
    size_t symmetric_pairs = 0;
-   for (size_t p = 0; p < undirected.size();) {
-      const int a = undirected[p].a;
-      const int b = undirected[p].b;
+   size_t nnz_full = 0;
+   for (size_t p = 0; p < entries.size();) {
+      const int a = entries[p].a;
+      const int b = entries[p].b;
       double forward = 0.0;
       double reverse = 0.0;
       bool have_forward = false;
       bool have_reverse = false;
       size_t q = p;
-      while (q < undirected.size() && undirected[q].a == a && undirected[q].b == b) {
-         if (undirected[q].forward) {
-            forward += undirected[q].v;
+      while (q < entries.size() && entries[q].a == a && entries[q].b == b) {
+         if (entries[q].forward) {
+            forward += entries[q].v;
             have_forward = true;
          }
          else {
-            reverse += undirected[q].v;
+            reverse += entries[q].v;
             have_reverse = true;
          }
          ++q;
@@ -613,26 +715,22 @@ Instance read_instance(
 
       const double internal_value = (sense == ObjectiveSense::Max) ? -value : value;
       if (internal_value != 0.0) {
-         nz.push_back({ a, b, internal_value });
-         if (a != b) nz.push_back({ b, a, internal_value });
+         canonical.push_back({ a, b, internal_value });
+         nnz_full += (a == b ? 1U : 2U);
       }
       p = q;
    }
 
-   undirected.clear();
-   undirected.shrink_to_fit();
+   entries.clear();
+   entries.shrink_to_fit();
 
-   std::sort(nz.begin(), nz.end(), [](const Entry& lhs, const Entry& rhs) {
-      if (lhs.i != rhs.i) return lhs.i < rhs.i;
-      return lhs.j < rhs.j;
-      });
-
-   ins.nnz_full = nz.size();
+   ins.nnz_full = nnz_full;
    const double denom = static_cast<double>(ins.n) * static_cast<double>(ins.n);
    ins.density = (denom > 0.0) ? static_cast<double>(ins.nnz_full) / denom : 0.0;
    const long double dense_bytes = static_cast<long double>(ins.n) * static_cast<long double>(ins.n) * sizeof(double);
    const bool dense_size_allowed = dense_bytes <= static_cast<long double>(MAX_DENSE_MATRIX_BYTES);
    ins.sparse = (ins.density <= SPARSE_DENSITY_THRESHOLD) || !dense_size_allowed;
+   ins.diagonal.assign(static_cast<size_t>(ins.n), 0.0);
 
    if (ins.sparse) {
       if (ins.nnz_full > static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -643,8 +741,9 @@ Instance read_instance(
       ins.col_ind.resize(ins.nnz_full);
       ins.val.resize(ins.nnz_full);
 
-      for (const auto& e : nz) {
+      for (const auto& e : canonical) {
          ins.row_ptr[static_cast<size_t>(e.i) + 1]++;
+         if (e.i != e.j) ins.row_ptr[static_cast<size_t>(e.j) + 1]++;
       }
 
       for (int i = 0; i < ins.n; ++i) {
@@ -652,10 +751,18 @@ Instance read_instance(
       }
 
       std::vector<int> next = ins.row_ptr;
-      for (const auto& e : nz) {
+      for (const auto& e : canonical) {
          const int pos = next[e.i]++;
          ins.col_ind[pos] = e.j;
          ins.val[pos] = e.v;
+         if (e.i == e.j) {
+            ins.diagonal[e.i] = e.v;
+         }
+         else {
+            const int reverse_pos = next[e.j]++;
+            ins.col_ind[reverse_pos] = e.i;
+            ins.val[reverse_pos] = e.v;
+         }
       }
    }
    else {
@@ -663,8 +770,10 @@ Instance read_instance(
       ins.col_ind.clear();
       ins.val.clear();
       ins.Q.assign(static_cast<size_t>(ins.n) * static_cast<size_t>(ins.n), 0.0);
-      for (const auto& e : nz) {
+      for (const auto& e : canonical) {
          Qref(ins, e.i, e.j) = e.v;
+         Qref(ins, e.j, e.i) = e.v;
+         if (e.i == e.j) ins.diagonal[e.i] = e.v;
       }
    }
 
@@ -724,9 +833,14 @@ std::vector<double> compute_h_x(const std::vector<int>& x, const Instance& ins) 
       }
       else {
          const double* row = &ins.Q[static_cast<size_t>(col) * static_cast<size_t>(n)];
-         for (int i = 0; i < n; ++i) {
-            h[i] += row[i];
-         }
+         std::transform(
+            std::execution::unseq,
+            h.begin(),
+            h.end(),
+            row,
+            h.begin(),
+            [](double current, double value) { return current + value; }
+         );
       }
    }
    return h;
@@ -748,28 +862,18 @@ static inline void add_symmetric_column_to_h(
    }
 
    const double* row = &ins.Q[static_cast<size_t>(col) * static_cast<size_t>(ins.n)];
-   for (int l = 0; l < ins.n; ++l) {
-      h[l] += scale * row[l];
-   }
+   std::transform(
+      std::execution::unseq,
+      h.begin(),
+      h.end(),
+      row,
+      h.begin(),
+      [scale](double current, double value) { return current + scale * value; }
+   );
 }
 
-std::vector<double> diagonal_values(const Instance& ins) {
-   std::vector<double> diagonal(static_cast<size_t>(ins.n), 0.0);
-   if (!ins.sparse) {
-      for (int i = 0; i < ins.n; ++i) {
-         diagonal[i] = ins.Q[static_cast<size_t>(i) * static_cast<size_t>(ins.n) + static_cast<size_t>(i)];
-      }
-      return diagonal;
-   }
-   for (int i = 0; i < ins.n; ++i) {
-      const int begin = ins.row_ptr[i];
-      const int end = ins.row_ptr[i + 1];
-      auto it = std::lower_bound(ins.col_ind.begin() + begin, ins.col_ind.begin() + end, i);
-      if (it != ins.col_ind.begin() + end && *it == i) {
-         diagonal[i] = ins.val[static_cast<size_t>(it - ins.col_ind.begin())];
-      }
-   }
-   return diagonal;
+const std::vector<double>& diagonal_values(const Instance& ins) {
+   return ins.diagonal;
 }
 
 void build_candidate_interactions(
@@ -779,8 +883,8 @@ void build_candidate_interactions(
    std::vector<double>& interactions,
    std::vector<int>& col_position
 ) {
-   interactions.assign(rows.size() * cols.size(), 0.0);
    if (!ins.sparse) return;
+   interactions.assign(rows.size() * cols.size(), 0.0);
 
    for (size_t b = 0; b < cols.size(); ++b) col_position[cols[b]] = static_cast<int>(b);
    for (size_t a = 0; a < rows.size(); ++a) {
@@ -793,33 +897,38 @@ void build_candidate_interactions(
    for (int col : cols) col_position[col] = -1;
 }
 
-std::vector<double> interaction_impact(const Instance& ins) {
+std::vector<double> interaction_impact(const Instance& ins, int requested_workers) {
    const int n = ins.n;
    std::vector<double> imp(n, 0.0);
+   if (n == 0) return imp;
 
    const double scale = (n > 1) ? (2.0 * static_cast<double>(ins.k - 1) / static_cast<double>(n - 1)) : 0.0;
 
-#pragma omp parallel for schedule(static)
-   for (int i = 0; i < n; ++i) {
-      double diag = 0.0;
-      double off_sum = 0.0;
+   const int worker_count = std::min(n, std::max(1, requested_workers));
+   parallel_for_workers(worker_count, [&](int block) noexcept {
+      const int first = static_cast<int>(static_cast<int64_t>(block) * n / worker_count);
+      const int last = static_cast<int>(static_cast<int64_t>(block + 1) * n / worker_count);
+      for (int i = first; i < last; ++i) {
+         double diag = 0.0;
+         double off_sum = 0.0;
 
-      if (ins.sparse) {
-         for (int p = ins.row_ptr[i]; p < ins.row_ptr[i + 1]; ++p) {
-            if (ins.col_ind[p] == i) diag += ins.val[p];
-            else off_sum += ins.val[p];
+         if (ins.sparse) {
+            for (int p = ins.row_ptr[i]; p < ins.row_ptr[i + 1]; ++p) {
+               if (ins.col_ind[p] == i) diag += ins.val[p];
+               else off_sum += ins.val[p];
+            }
          }
-      }
-      else {
-         const double* row = &ins.Q[static_cast<size_t>(i) * static_cast<size_t>(n)];
-         diag = row[i];
-         for (int j = 0; j < n; ++j) {
-            if (i != j) off_sum += row[j];
+         else {
+            const double* row = &ins.Q[static_cast<size_t>(i) * static_cast<size_t>(n)];
+            diag = row[i];
+            for (int j = 0; j < n; ++j) {
+               if (i != j) off_sum += row[j];
+            }
          }
-      }
 
-      imp[i] = diag + scale * off_sum;
-   }
+         imp[i] = diag + scale * off_sum;
+      }
+      });
    return imp;
 }
 
@@ -834,7 +943,8 @@ std::vector<int> build_set(
    std::iota(idx.begin(), idx.end(), 0);
 
    std::sort(idx.begin(), idx.end(), [&](int a, int b) {
-      return impact[a] < impact[b];
+      if (impact[a] != impact[b]) return impact[a] < impact[b];
+      return a < b;
       });
 
    int v_0 = static_cast<int>(std::ceil(par.v_0_frac * ins.n));
@@ -853,6 +963,22 @@ std::vector<int> selected_indices(const std::vector<int>& x) {
       if (x[i]) ones.push_back(i);
    }
    return ones;
+}
+
+uint64_t solution_fingerprint(const std::vector<int>& x) {
+   uint64_t hash = 1469598103934665603ULL;
+   for (size_t i = 0; i < x.size(); ++i) {
+      if (x[i] == 0) continue;
+      uint64_t value = static_cast<uint64_t>(i + 1);
+      for (int byte = 0; byte < 8; ++byte) {
+         hash ^= value & 0xffU;
+         hash *= 1099511628211ULL;
+         value >>= 8;
+      }
+   }
+   hash ^= static_cast<uint64_t>(x.size());
+   hash *= 1099511628211ULL;
+   return hash;
 }
 
 EliteSol make_elite_solution(const std::vector<int>& x, double obj) {
@@ -885,27 +1011,17 @@ void refresh_elite_min_distances(std::vector<EliteSol>& elite_pool, const Instan
 }
 
 void add_to_elite_count(
-   const std::vector<int>& x,
-   std::vector<int>& elite_ones_count,
-   const Instance& ins
+   const std::vector<int>& selected,
+   std::vector<int>& elite_ones_count
 ) {
-   for (int i = 0; i < ins.n; ++i) {
-      if (x[i] == 1) {
-         elite_ones_count[i]++;
-      }
-   }
+   for (int i : selected) elite_ones_count[i]++;
 }
 
 void remove_from_elite_count(
-   const std::vector<int>& x,
-   std::vector<int>& elite_ones_count,
-   const Instance& ins
+   const std::vector<int>& selected,
+   std::vector<int>& elite_ones_count
 ) {
-   for (int i = 0; i < ins.n; ++i) {
-      if (x[i] == 1) {
-         elite_ones_count[i]--;
-      }
-   }
+   for (int i : selected) elite_ones_count[i]--;
 }
 
 bool try_insert_elite(
@@ -925,7 +1041,8 @@ bool try_insert_elite(
    auto sort_elite_pool = [&]() {
       std::sort(elite_pool.begin(), elite_pool.end(),
          [](const EliteSol& a, const EliteSol& b) {
-            return a.obj < b.obj;
+            if (a.obj != b.obj) return a.obj < b.obj;
+            return a.x < b.x;
          });
       };
 
@@ -950,7 +1067,7 @@ bool try_insert_elite(
 
    if (elite_pool.empty()) {
       elite_pool.push_back(candidate);
-      add_to_elite_count(x, elite_ones_count, ins);
+      add_to_elite_count(candidate.ones, elite_ones_count);
       return true;
    }
 
@@ -970,7 +1087,7 @@ bool try_insert_elite(
 
       if (enough_diversity || good_and_comparable_diversity) {
          elite_pool.push_back(candidate);
-         add_to_elite_count(x, elite_ones_count, ins);
+         add_to_elite_count(candidate.ones, elite_ones_count);
          sort_elite_pool();
          refresh_elite_min_distances(elite_pool, ins);
          return true;
@@ -1017,9 +1134,9 @@ bool try_insert_elite(
    }
 
    if (replace_idx >= 0) {
-      remove_from_elite_count(elite_pool[replace_idx].x, elite_ones_count, ins);
+      remove_from_elite_count(elite_pool[replace_idx].ones, elite_ones_count);
       elite_pool[replace_idx] = candidate;
-      add_to_elite_count(x, elite_ones_count, ins);
+      add_to_elite_count(candidate.ones, elite_ones_count);
       sort_elite_pool();
       refresh_elite_min_distances(elite_pool, ins);
       return true;
@@ -1041,10 +1158,187 @@ static int tabu_tenure_T(int T_nimp, const Params& par) {
    return T;
 }
 
+template <class Compare>
+void select_candidate_prefix(std::vector<int>& candidates, int keep, Compare compare) {
+   if (keep >= static_cast<int>(candidates.size())) return;
+   auto middle = candidates.begin() + keep;
+   std::nth_element(candidates.begin(), middle, candidates.end(), compare);
+   candidates.resize(static_cast<size_t>(keep));
+   std::sort(candidates.begin(), candidates.end(), compare);
+}
+
+struct IncomingCandidate {
+   double key = 0.0;
+   int position = -1;
+   int variable = -1;
+};
+
+struct TabuScratch {
+   std::vector<int> tabu_until;
+   std::vector<int> ones;
+   std::vector<int> zeros;
+   std::vector<int> pos_in_ones;
+   std::vector<int> pos_in_zeros;
+   std::vector<int> cand_out;
+   std::vector<int> cand_in;
+   std::vector<int> best_x;
+   std::vector<int> candidate_position;
+   std::vector<int> edge_generation;
+   std::vector<double> sparse_in_term;
+   std::vector<IncomingCandidate> incoming_order;
+};
+
+struct MoveChoice {
+   int i = -1;
+   int j = -1;
+   int out_position = -1;
+   int in_position = -1;
+   double delta = std::numeric_limits<double>::infinity();
+
+   bool valid() const { return i >= 0 && j >= 0; }
+};
+
+static inline void consider_move(
+   MoveChoice& choice,
+   int i,
+   int j,
+   int out_position,
+   int in_position,
+   double delta
+) {
+   if (!choice.valid() || delta < choice.delta ||
+      (delta == choice.delta &&
+         (out_position < choice.out_position ||
+            (out_position == choice.out_position && in_position < choice.in_position)))) {
+      choice = { i, j, out_position, in_position, delta };
+   }
+}
+
+MoveChoice find_dense_tabu_move(
+   const Instance& ins,
+   const std::vector<int>& cand_out,
+   const std::vector<int>& cand_in,
+   const std::vector<double>& h,
+   const std::vector<int>& tabu_until,
+   int iter,
+   double obj,
+   double best_obj
+) {
+   const size_t cols = cand_in.size();
+   MoveChoice allowed;
+   MoveChoice fallback;
+   for (size_t a = 0; a < cand_out.size(); ++a) {
+      const int i = cand_out[a];
+      const double* row = &ins.Q[static_cast<size_t>(i) * static_cast<size_t>(ins.n)];
+      for (size_t b = 0; b < cols; ++b) {
+         const int j = cand_in[b];
+         const double delta =
+            2.0 * (h[j] - h[i]) + ins.diagonal[i] + ins.diagonal[j] - 2.0 * row[j];
+         consider_move(fallback, i, j, static_cast<int>(a), static_cast<int>(b), delta);
+         const bool is_tabu = (iter <= tabu_until[i] || iter <= tabu_until[j]);
+         const bool aspiration = (obj + delta < best_obj - 1e-6);
+         if (!is_tabu || aspiration) {
+            consider_move(allowed, i, j, static_cast<int>(a), static_cast<int>(b), delta);
+         }
+      }
+   }
+   return allowed.valid() ? allowed : fallback;
+}
+
+MoveChoice find_sparse_tabu_move(
+   const Instance& ins,
+   const std::vector<int>& cand_out,
+   const std::vector<int>& cand_in,
+   const std::vector<double>& h,
+   const std::vector<int>& tabu_until,
+   int iter,
+   double obj,
+   double best_obj,
+   TabuScratch& scratch
+) {
+   const int cols = static_cast<int>(cand_in.size());
+   if (scratch.candidate_position.size() != static_cast<size_t>(ins.n)) {
+      scratch.candidate_position.assign(static_cast<size_t>(ins.n), -1);
+   }
+   for (int b = 0; b < cols; ++b) scratch.candidate_position[cand_in[b]] = b;
+
+   scratch.incoming_order.resize(static_cast<size_t>(cols));
+   scratch.sparse_in_term.resize(static_cast<size_t>(cols));
+   for (int b = 0; b < cols; ++b) {
+      const int j = cand_in[b];
+      const double incoming_term = 2.0 * h[j] + ins.diagonal[j];
+      scratch.sparse_in_term[b] = incoming_term;
+      scratch.incoming_order[b] = { incoming_term, b, j };
+   }
+   std::sort(
+      scratch.incoming_order.begin(),
+      scratch.incoming_order.end(),
+      [](const IncomingCandidate& lhs, const IncomingCandidate& rhs) {
+         if (lhs.key != rhs.key) return lhs.key < rhs.key;
+         return lhs.position < rhs.position;
+      }
+   );
+   scratch.edge_generation.assign(static_cast<size_t>(cols), 0);
+
+   MoveChoice allowed;
+   MoveChoice fallback;
+   for (int a = 0; a < static_cast<int>(cand_out.size()); ++a) {
+      const int i = cand_out[a];
+      const int generation = a + 1;
+      const double outgoing_term = -2.0 * h[i] + ins.diagonal[i];
+
+      for (int p = ins.row_ptr[i]; p < ins.row_ptr[i + 1]; ++p) {
+         const int j = ins.col_ind[p];
+         const int b = scratch.candidate_position[j];
+         if (b < 0) continue;
+         scratch.edge_generation[b] = generation;
+         const double delta = outgoing_term + scratch.sparse_in_term[b] - 2.0 * ins.val[p];
+         consider_move(fallback, i, j, a, b, delta);
+         const bool is_tabu = (iter <= tabu_until[i] || iter <= tabu_until[j]);
+         const bool aspiration = (obj + delta < best_obj - 1e-6);
+         if (!is_tabu || aspiration) consider_move(allowed, i, j, a, b, delta);
+      }
+
+      bool found_any_non_edge = false;
+      bool found_nontabu_non_edge = false;
+      for (const IncomingCandidate& incoming : scratch.incoming_order) {
+         const int b = incoming.position;
+         if (scratch.edge_generation[b] == generation) continue;
+         const int j = incoming.variable;
+         // With q(i,j)=0 the move delta is separable. Incoming candidates
+         // are sorted by their complete term, so the first admissible
+         // non-neighbour is the exact deterministic minimum for this i.
+         const double delta = outgoing_term + incoming.key;
+
+         if (!found_any_non_edge) {
+            consider_move(fallback, i, j, a, b, delta);
+            const bool is_tabu = (iter <= tabu_until[i] || iter <= tabu_until[j]);
+            const bool aspiration = (obj + delta < best_obj - 1e-6);
+            if (!is_tabu || aspiration) consider_move(allowed, i, j, a, b, delta);
+            found_any_non_edge = true;
+         }
+
+         if (iter > tabu_until[i] && iter > tabu_until[j]) {
+            if (!found_nontabu_non_edge) {
+               consider_move(allowed, i, j, a, b, delta);
+               found_nontabu_non_edge = true;
+            }
+         }
+
+         if (found_any_non_edge && (iter <= tabu_until[i] || found_nontabu_non_edge)) break;
+      }
+   }
+
+   for (int j : cand_in) scratch.candidate_position[j] = -1;
+   return allowed.valid() ? allowed : fallback;
+}
+
 void tabu_search(
    std::vector<int>& x,
    const Instance& ins,
    double& obj,
+   std::vector<double>& h,
+   TabuScratch& scratch,
    const Params& par,
    const SearchControl& control,
    ObjectiveSense sense,
@@ -1059,14 +1353,19 @@ void tabu_search(
       throw std::runtime_error("tabu_search: x has wrong cardinality.");
    }
 
-   std::vector<double> h = compute_h_x(x, ins);
-   const std::vector<double> diagonal = diagonal_values(ins);
-   std::vector<int> tabu_until(n, -1);
-
-   std::vector<int> ones;
-   std::vector<int> zeros;
-   std::vector<int> pos_in_ones(n, -1);
-   std::vector<int> pos_in_zeros(n, -1);
+   if (h.size() != static_cast<size_t>(n)) {
+      throw std::runtime_error("tabu_search: invalid cached h vector.");
+   }
+   std::vector<int>& tabu_until = scratch.tabu_until;
+   std::vector<int>& ones = scratch.ones;
+   std::vector<int>& zeros = scratch.zeros;
+   std::vector<int>& pos_in_ones = scratch.pos_in_ones;
+   std::vector<int>& pos_in_zeros = scratch.pos_in_zeros;
+   tabu_until.assign(static_cast<size_t>(n), -1);
+   pos_in_ones.assign(static_cast<size_t>(n), -1);
+   pos_in_zeros.assign(static_cast<size_t>(n), -1);
+   ones.clear();
+   zeros.clear();
 
    ones.reserve(k);
    zeros.reserve(n - k);
@@ -1096,7 +1395,8 @@ void tabu_search(
       vec.push_back(v);
       };
 
-   std::vector<int> best_x = x;
+   std::vector<int>& best_x = scratch.best_x;
+   best_x = x;
    double best_obj = obj;
 
    auto record_target_if_reached = [&](double candidate_internal_obj) {
@@ -1112,23 +1412,21 @@ void tabu_search(
          auto t_now = std::chrono::steady_clock::now();
          res.time_to_target =
             std::chrono::duration<double>(t_now - control.t_start).count();
-
-         control.stop_requested.store(true, std::memory_order_relaxed);
       }
       };
 
    record_target_if_reached(best_obj);
 
-   if (control.should_stop()) {
+   if (res.reached_target || control.should_stop()) {
       return;
    }
 
-   std::vector<int> cand_out;
-   std::vector<int> cand_in;
+   std::vector<int>& cand_out = scratch.cand_out;
+   std::vector<int>& cand_in = scratch.cand_in;
+   cand_out.clear();
+   cand_in.clear();
    cand_out.reserve(n);
    cand_in.reserve(n);
-   std::vector<double> candidate_interactions;
-   std::vector<int> candidate_position(static_cast<size_t>(n), -1);
    int no_improve_tabu = 0;
 
    for (int iter = 0; iter < par.T_max; ++iter) {
@@ -1144,84 +1442,21 @@ void tabu_search(
 
       const int num_cand_in = std::min(par.v_2, static_cast<int>(cand_in.size()));
 
-      if (num_cand_out < static_cast<int>(cand_out.size())) {
-         std::nth_element(
-            cand_out.begin(),
-            cand_out.begin() + num_cand_out,
-            cand_out.end(),
-            [&](int a, int b) {
-               return h[a] > h[b];
-            }
-         );
-      }
-      cand_out.resize(num_cand_out);
+      select_candidate_prefix(cand_out, num_cand_out, [&](int a, int b) {
+         if (h[a] != h[b]) return h[a] > h[b];
+         return a < b;
+         });
+      select_candidate_prefix(cand_in, num_cand_in, [&](int a, int b) {
+         if (h[a] != h[b]) return h[a] < h[b];
+         return a < b;
+         });
 
-      if (num_cand_in < static_cast<int>(cand_in.size())) {
-         std::nth_element(
-            cand_in.begin(),
-            cand_in.begin() + num_cand_in,
-            cand_in.end(),
-            [&](int a, int b) {
-               return h[a] < h[b];
-            }
-         );
-      }
-      cand_in.resize(num_cand_in);
-
-      build_candidate_interactions(
-         ins, cand_out, cand_in, candidate_interactions, candidate_position
-      );
-
-      int best_i = -1;
-      int best_j = -1;
-      double best_delta = std::numeric_limits<double>::infinity();
-
-      for (size_t a = 0; a < cand_out.size(); ++a) {
-         const int i = cand_out[a];
-         for (size_t b = 0; b < cand_in.size(); ++b) {
-            const int j = cand_in[b];
-            const double qij = ins.sparse
-               ? candidate_interactions[a * cand_in.size() + b]
-               : Qat(ins, i, j);
-            const double delta = 2.0 * (h[j] - h[i]) + diagonal[i] + diagonal[j] - 2.0 * qij;
-
-            const double new_obj = obj + delta;
-
-            const bool is_tabu =
-               (iter <= tabu_until[i] || iter <= tabu_until[j]);
-
-            const bool aspiration =
-               (new_obj < best_obj - 1e-6);
-
-            if (is_tabu && !aspiration) {
-               continue;
-            }
-
-            if (delta < best_delta) {
-               best_delta = delta;
-               best_i = i;
-               best_j = j;
-            }
-         }
-      }
-
-      if (best_i < 0 || best_j < 0) {
-         for (size_t a = 0; a < cand_out.size(); ++a) {
-            const int i = cand_out[a];
-            for (size_t b = 0; b < cand_in.size(); ++b) {
-               const int j = cand_in[b];
-               const double qij = ins.sparse
-                  ? candidate_interactions[a * cand_in.size() + b]
-                  : Qat(ins, i, j);
-               const double delta = 2.0 * (h[j] - h[i]) + diagonal[i] + diagonal[j] - 2.0 * qij;
-               if (delta < best_delta) {
-                  best_delta = delta;
-                  best_i = i;
-                  best_j = j;
-               }
-            }
-         }
-      }
+      const MoveChoice move = ins.sparse
+         ? find_sparse_tabu_move(ins, cand_out, cand_in, h, tabu_until, iter, obj, best_obj, scratch)
+         : find_dense_tabu_move(ins, cand_out, cand_in, h, tabu_until, iter, obj, best_obj);
+      const int best_i = move.i;
+      const int best_j = move.j;
+      const double best_delta = move.delta;
 
       if (best_i < 0 || best_j < 0) {
          break;
@@ -1247,7 +1482,7 @@ void tabu_search(
 
          record_target_if_reached(best_obj);
 
-         if (control.should_stop()) {
+         if (res.reached_target || control.should_stop()) {
             break;
          }
       }
@@ -1275,7 +1510,7 @@ std::vector<int> path_relink_one_direction(
    const std::vector<int>& target,
    const Params& par,
    const SearchControl& control,
-   std::mt19937_64& rng
+   DeterministicRng& rng
 ) {
    const int n = ins.n;
 
@@ -1296,7 +1531,7 @@ std::vector<int> path_relink_one_direction(
    std::vector<int> x = start;
    double obj = objective_x(x, ins);
    std::vector<double> h = compute_h_x(x, ins);
-   const std::vector<double> diagonal = diagonal_values(ins);
+   const std::vector<double>& diagonal = diagonal_values(ins);
    std::vector<double> candidate_interactions;
    std::vector<int> candidate_position(static_cast<size_t>(n), -1);
    bool found_intermediate = false;
@@ -1333,37 +1568,28 @@ std::vector<int> path_relink_one_direction(
       const int B = std::min(par.v_2, static_cast<int>(add_set.size()));
 
       std::vector<int> cand_remove = remove_set;
-      if (A < static_cast<int>(cand_remove.size())) {
-         std::nth_element(
-            cand_remove.begin(),
-            cand_remove.begin() + A,
-            cand_remove.end(),
-            [&](int a, int b) {
-               return h[a] > h[b];
-            }
-         );
-      }
-      cand_remove.resize(A);
+      select_candidate_prefix(cand_remove, A, [&](int a, int b) {
+         if (h[a] != h[b]) return h[a] > h[b];
+         return a < b;
+         });
 
       std::vector<int> cand_add = add_set;
-      if (B < static_cast<int>(cand_add.size())) {
-         std::nth_element(
-            cand_add.begin(),
-            cand_add.begin() + B,
-            cand_add.end(),
-            [&](int a, int b) {
-               return h[a] < h[b];
-            }
-         );
-      }
-      cand_add.resize(B);
+      select_candidate_prefix(cand_add, B, [&](int a, int b) {
+         if (h[a] != h[b]) return h[a] < h[b];
+         return a < b;
+         });
 
       build_candidate_interactions(
          ins, cand_remove, cand_add, candidate_interactions, candidate_position
       );
 
+      const auto move_less = [](const Move& a, const Move& b) {
+         if (a.delta != b.delta) return a.delta < b.delta;
+         if (a.i != b.i) return a.i < b.i;
+         return a.j < b.j;
+         };
       std::vector<Move> moves;
-      moves.reserve(static_cast<size_t>(cand_remove.size()) * static_cast<size_t>(cand_add.size()));
+      moves.reserve(10);
 
       for (size_t a = 0; a < cand_remove.size(); ++a) {
          const int i = cand_remove[a];
@@ -1373,7 +1599,14 @@ std::vector<int> path_relink_one_direction(
                ? candidate_interactions[a * cand_add.size() + b]
                : Qat(ins, i, j);
             const double delta = 2.0 * (h[j] - h[i]) + diagonal[i] + diagonal[j] - 2.0 * qij;
-            moves.push_back({ i, j, delta });
+            const Move candidate{ i, j, delta };
+            if (moves.size() < 10) {
+               moves.push_back(candidate);
+            }
+            else {
+               auto worst = std::max_element(moves.begin(), moves.end(), move_less);
+               if (move_less(candidate, *worst)) *worst = candidate;
+            }
          }
       }
 
@@ -1382,19 +1615,9 @@ std::vector<int> path_relink_one_direction(
       }
 
       const int R = std::min<int>(10, static_cast<int>(moves.size()));
-      if (R < static_cast<int>(moves.size())) {
-         std::nth_element(
-            moves.begin(),
-            moves.begin() + R,
-            moves.end(),
-            [](const Move& a, const Move& b) {
-               return a.delta < b.delta;
-            }
-         );
-      }
+      std::sort(moves.begin(), moves.end(), move_less);
 
-      std::uniform_int_distribution<int> pick(0, R - 1);
-      const Move mv = moves[pick(rng)];
+      const Move mv = moves[static_cast<size_t>(bounded_random(rng, static_cast<uint64_t>(R)))];
 
       x[mv.i] = 0;
       x[mv.j] = 1;
@@ -1441,7 +1664,7 @@ std::vector<int> path_relinking(
    const std::vector<EliteSol>& elite_pool,
    const Params& par,
    const SearchControl& control,
-   std::mt19937_64& rng
+   DeterministicRng& rng
 ) {
    const int n = ins.n;
 
@@ -1535,18 +1758,32 @@ std::vector<int> path_relinking(
    return best_backward;
 }
 
-std::vector<int> random_greedy_construction(
+struct SearchPoint {
+   std::vector<int> x;
+   std::vector<double> h;
+   double obj = std::numeric_limits<double>::infinity();
+};
+
+SearchPoint make_search_point(std::vector<int> x, const Instance& ins) {
+   SearchPoint point;
+   point.x = std::move(x);
+   point.obj = objective_x(point.x, ins);
+   point.h = compute_h_x(point.x, ins);
+   return point;
+}
+
+SearchPoint random_greedy_construction(
    const Instance& ins,
    const std::vector<int>& C1,
    double random_frac,
    const Params& par,
    const std::vector<EliteSol>& elite_pool,
    const SearchControl& control,
-   std::mt19937_64& rng
+   DeterministicRng& rng
 ) {
    const int n = ins.n;
    const int k = ins.k;
-   const std::vector<double> diagonal = diagonal_values(ins);
+   const std::vector<double>& diagonal = diagonal_values(ins);
 
    int v_3 = static_cast<int>(std::round(random_frac * k));
 
@@ -1561,14 +1798,26 @@ std::vector<int> random_greedy_construction(
 
    const int max_attempts = elite_pool.empty() ? 1 : 200;
 
-   std::vector<int> best_x(n, 0);
+   SearchPoint best_point;
+   best_point.x.assign(static_cast<size_t>(n), 0);
    int best_min_dist = -1;
+
+   struct AddMove {
+      int i;
+      double gain;
+   };
+   const auto add_move_less = [](const AddMove& a, const AddMove& b) {
+      if (a.gain != b.gain) return a.gain < b.gain;
+      return a.i < b.i;
+      };
+   std::vector<AddMove> moves;
+   moves.reserve(static_cast<size_t>(n));
 
    for (int attempt = 0; attempt < max_attempts; ++attempt) {
       if (control.should_stop()) return {};
       std::vector<int> x(n, 0);
       std::vector<int> cand_attempt = cand;
-      std::shuffle(cand_attempt.begin(), cand_attempt.end(), rng);
+      deterministic_shuffle(cand_attempt.begin(), cand_attempt.end(), rng);
       int ones_now = 0;
 
       for (int t = 0; t < v_3; ++t) {
@@ -1580,24 +1829,21 @@ std::vector<int> random_greedy_construction(
       }
 
       std::vector<double> h = compute_h_x(x, ins);
+      double obj = objective_x(x, ins);
 
       while (ones_now < k) {
          if (control.should_stop()) {
             for (int i = 0; i < n && ones_now < k; ++i) {
                if (!x[i]) {
+                  obj += diagonal[i] + 2.0 * h[i];
                   x[i] = 1;
                   ++ones_now;
+                  add_symmetric_column_to_h(h, ins, i, 1.0);
                }
             }
-            return x;
+            return { std::move(x), std::move(h), obj };
          }
-         struct AddMove {
-            int i;
-            double gain;
-         };
-
-         std::vector<AddMove> moves;
-         moves.reserve(n);
+         moves.clear();
 
          for (int i = 0; i < n; ++i) {
             if (x[i]) continue;
@@ -1612,20 +1858,16 @@ std::vector<int> random_greedy_construction(
 
          int R = std::min(20, static_cast<int>(moves.size()));
          if (R < static_cast<int>(moves.size())) {
-            std::nth_element(
-               moves.begin(),
-               moves.begin() + R,
-               moves.end(),
-               [](const AddMove& a, const AddMove& b) {
-                  return a.gain < b.gain;
-               }
-            );
+            auto middle = moves.begin() + R;
+            std::nth_element(moves.begin(), middle, moves.end(), add_move_less);
+            moves.resize(static_cast<size_t>(R));
+            std::sort(moves.begin(), moves.end(), add_move_less);
          }
 
-         std::uniform_int_distribution<int> pick(0, R - 1);
+         const AddMove selected = moves[static_cast<size_t>(bounded_random(rng, static_cast<uint64_t>(R)))];
+         const int best_i = selected.i;
 
-         int best_i = moves[pick(rng)].i;
-
+         obj += selected.gain;
          x[best_i] = 1;
          ++ones_now;
 
@@ -1633,7 +1875,7 @@ std::vector<int> random_greedy_construction(
       }
 
       if (elite_pool.empty()) {
-         return x;
+         return { std::move(x), std::move(h), obj };
       }
 
       int cur_min_dist = std::numeric_limits<int>::max();
@@ -1642,16 +1884,16 @@ std::vector<int> random_greedy_construction(
       }
 
       if (cur_min_dist >= d) {
-         return x;
+         return { std::move(x), std::move(h), obj };
       }
 
       if (cur_min_dist > best_min_dist) {
          best_min_dist = cur_min_dist;
-         best_x = std::move(x);
+         best_point = { std::move(x), std::move(h), obj };
       }
    }
 
-   return best_x;
+   return best_point;
 }
 
 std::vector<int> elite_based_restart(
@@ -1659,7 +1901,7 @@ std::vector<int> elite_based_restart(
    const Params& par,
    const std::vector<EliteSol>& elite_pool,
    const SearchControl& control,
-   std::mt19937_64& rng
+   DeterministicRng& rng
 ) {
    const int n = ins.n;
    const int k = ins.k;
@@ -1667,7 +1909,7 @@ std::vector<int> elite_based_restart(
    if (elite_pool.empty()) {
       std::vector<int> idx(n);
       std::iota(idx.begin(), idx.end(), 0);
-      std::shuffle(idx.begin(), idx.end(), rng);
+      deterministic_shuffle(idx.begin(), idx.end(), rng);
 
       std::vector<int> x(n, 0);
       for (int t = 0; t < k; ++t) {
@@ -1744,7 +1986,7 @@ std::vector<int> elite_based_restart(
       }
 
       std::vector<int> cand = free_vars;
-      std::shuffle(cand.begin(), cand.end(), rng);
+      deterministic_shuffle(cand.begin(), cand.end(), rng);
 
       for (int t = 0; t < need; ++t) {
          x[cand[t]] = 1;
@@ -1770,7 +2012,7 @@ std::vector<int> elite_based_restart(
 std::vector<int> random_diverse_restart(
    const Instance& ins,
    const Params& par,
-   std::mt19937_64& rng,
+   DeterministicRng& rng,
    const std::vector<EliteSol>& elite_pool,
    const SearchControl& control
 ) {
@@ -1789,7 +2031,7 @@ std::vector<int> random_diverse_restart(
 
    for (int attempt = 0; attempt < max_attempts; ++attempt) {
       if (control.should_stop()) return {};
-      std::shuffle(idx.begin(), idx.end(), rng);
+      deterministic_shuffle(idx.begin(), idx.end(), rng);
       std::vector<int> x(n, 0);
       for (int t = 0; t < k; ++t) {
          x[idx[t]] = 1;
@@ -1817,101 +2059,116 @@ std::vector<int> random_diverse_restart(
    return best_x;
 }
 
-Result main_block(
+struct WorkerSearchState {
+   explicit WorkerSearchState(uint64_t seed) : rng(seed) {}
+
+   DeterministicRng rng;
+   Result result;
+   int no_improve = 0;
+   int starts_completed = 0;
+   bool finished = false;
+   std::vector<int> incumbent_for_guide;
+   std::vector<int> candidate_x;
+   TabuScratch tabu_scratch;
+   double candidate_obj = std::numeric_limits<double>::infinity();
+   bool candidate_ready = false;
+};
+
+void run_worker_start(
    const Instance& ins,
    const Params& par,
-   uint64_t seed,
-   SharedElite& global_elite,
-   const std::vector<int>& C1,
+   WorkerSearchState& state,
+   const EliteState& elite_state,
    const SearchControl& control,
    ObjectiveSense sense,
    PrintScale scale,
    const BestKnownObjective& best_known
 ) {
-   std::mt19937_64 rng(seed);
+   state.candidate_ready = false;
+   if (state.finished || state.result.reached_target || control.should_stop()) return;
 
-   Result res;
-   int no_improve = 0;
-   std::vector<int> incumbent_for_guide;
-   for (int start = 0; start < par.num_starts; ++start) {
-      if (control.should_stop()) break;
+   const int start = state.starts_completed++;
+   const std::vector<EliteSol>& elite_snapshot = elite_state.pool;
 
-      std::vector<int> x;
-      const std::shared_ptr<const EliteState> elite_state =
-         std::atomic_load_explicit(&global_elite.snapshot, std::memory_order_acquire);
-      const std::vector<EliteSol>& elite_snapshot = elite_state->pool;
-      const std::vector<int>& elite_count_snapshot = elite_state->ones_count;
-
-      if (!elite_snapshot.empty() && no_improve >= 10) {
-         x = path_relinking(ins, incumbent_for_guide, elite_snapshot, par, control, rng);
-         no_improve = 0;
+   SearchPoint point;
+   if (!elite_snapshot.empty() && state.no_improve >= 10) {
+      point = make_search_point(
+         path_relinking(ins, state.incumbent_for_guide, elite_snapshot, par, control, state.rng), ins
+      );
+      state.no_improve = 0;
+   }
+   else {
+      if (!state.incumbent_for_guide.empty() && (start % 10 == 0)) {
+         point = make_search_point(elite_based_restart(ins, par, elite_snapshot, control, state.rng), ins);
+      }
+      else if (start % 10 == 9) {
+         point = make_search_point(random_diverse_restart(ins, par, state.rng, elite_snapshot, control), ins);
       }
       else {
-         if (!incumbent_for_guide.empty() && (start % 10 == 0)) {
-            x = elite_based_restart(ins, par, elite_snapshot, control, rng);
-         }
-         else if (start % 10 == 9) {
-            x = random_diverse_restart(ins, par, rng, elite_snapshot, control);
-         }
-         else {
-            std::vector<int> C2_local = C1;
-
-            for (int i = 0; i < ins.n; ++i) {
-               if (elite_count_snapshot[i] > 0) {
-                  C2_local.push_back(i);
-               }
-            }
-
-            std::sort(C2_local.begin(), C2_local.end());
-            C2_local.erase(std::unique(C2_local.begin(), C2_local.end()), C2_local.end());
-            x = random_greedy_construction(ins, C2_local, par.balance, par, elite_snapshot, control, rng);
-         }
-
-      }
-      if (x.empty()) break;
-      double obj = objective_x(x, ins);
-      tabu_search(x, ins, obj, par, control, sense, scale, best_known, res);
-
-      const bool stop_after_tabu = control.should_stop();
-      if (!stop_after_tabu) {
-      #pragma omp critical(elite_pool_update)
-         {
-            if (try_insert_elite(ins, global_elite.pool, global_elite.ones_count, x, obj, par)) {
-               publish_elite_snapshot(global_elite);
-            }
-         }
-      }
-
-      if (obj < res.best_obj) {
-         res.best_obj = obj;
-         res.best_x = x;
-
-         auto t_now = std::chrono::steady_clock::now();
-         res.time_to_best = std::chrono::duration<double>(t_now - control.t_start).count();
-
-         incumbent_for_guide = x;
-         no_improve = 0;
-
-         const double output_obj = output_objective_from_internal(res.best_obj, sense, scale);
-         if (best_known.loaded && target_reached(output_obj, best_known.objective, sense)) {
-            if (!res.reached_target) {
-               res.reached_target = true;
-               auto t_target_now = std::chrono::steady_clock::now();
-               res.time_to_target = std::chrono::duration<double>(t_target_now - control.t_start).count();
-            }
-            control.stop_requested.store(true, std::memory_order_relaxed);
-         }
-      }
-      else {
-         ++no_improve;
-      }
-
-      if (stop_after_tabu) {
-         break;
+         point = random_greedy_construction(
+            ins,
+            elite_state.construction_candidates,
+            par.balance,
+            par,
+            elite_snapshot,
+            control,
+            state.rng
+         );
       }
    }
 
-   return res;
+   if (point.x.empty()) {
+      state.finished = true;
+      return;
+   }
+
+   tabu_search(
+      point.x,
+      ins,
+      point.obj,
+      point.h,
+      state.tabu_scratch,
+      par,
+      control,
+      sense,
+      scale,
+      best_known,
+      state.result
+   );
+
+   const bool stop_after_tabu = state.result.reached_target || control.should_stop();
+   if (!stop_after_tabu) {
+      state.candidate_x = point.x;
+      state.candidate_obj = point.obj;
+      state.candidate_ready = true;
+   }
+
+   if (point.obj < state.result.best_obj) {
+      state.result.best_obj = point.obj;
+      state.result.best_x = point.x;
+      state.result.start_to_best = state.starts_completed;
+
+      const auto t_now = std::chrono::steady_clock::now();
+      state.result.time_to_best = std::chrono::duration<double>(t_now - control.t_start).count();
+
+      state.incumbent_for_guide = point.x;
+      state.no_improve = 0;
+
+      const double output_obj = output_objective_from_internal(state.result.best_obj, sense, scale);
+      if (best_known.loaded && target_reached(output_obj, best_known.objective, sense)) {
+         if (!state.result.reached_target) {
+            state.result.reached_target = true;
+            const auto t_target_now = std::chrono::steady_clock::now();
+            state.result.time_to_target =
+               std::chrono::duration<double>(t_target_now - control.t_start).count();
+         }
+      }
+   }
+   else {
+      ++state.no_improve;
+   }
+
+   if (stop_after_tabu) state.finished = true;
 }
 
 std::optional<Result> solve_trivial_cardinality(const Instance& ins) {
@@ -1923,7 +2180,7 @@ std::optional<Result> solve_trivial_cardinality(const Instance& ins) {
       std::fill(result.best_x.begin(), result.best_x.end(), 1);
    }
    else if (ins.k == 1) {
-      const std::vector<double> diagonal = diagonal_values(ins);
+      const std::vector<double>& diagonal = diagonal_values(ins);
       const auto best = std::min_element(diagonal.begin(), diagonal.end());
       if (best != diagonal.end()) result.best_x[static_cast<size_t>(best - diagonal.begin())] = 1;
    }
@@ -1937,7 +2194,7 @@ int main(int argc, char* argv[]) {
       if (argc < 4) {
          std::cerr << "Usage: " << argv[0]
             << " <max|min> <full|half> <instance.qsc> [best_known_results.csv_or_folder]"
-            << " [base_seed] [runs] [time_limit_seconds] [index_base] \n";
+            << " [base_seed] [runs] [time_limit_seconds] [index_base] [workers] [starts]\n";
          return 1;
       }
 
@@ -1954,6 +2211,12 @@ int main(int argc, char* argv[]) {
          if (base_arg == "0" || base_arg == "1") forced_index_base = std::stoi(base_arg);
          else if (base_arg != "auto") throw std::runtime_error("Index base must be 'auto', 0, or 1.");
       }
+      const int requested_workers = (argc >= 10)
+         ? parse_worker_count(argv[9], "Worker count")
+         : default_worker_count();
+      const int requested_starts = (argc >= 11)
+         ? parse_worker_count(argv[10], "Start count")
+         : 200000;
 
       if (num_runs <= 0) {
          throw std::runtime_error("Number of runs must be positive.");
@@ -1970,7 +2233,7 @@ int main(int argc, char* argv[]) {
       }
 
       Params par;
-      par.num_starts = 200000;
+      par.num_starts = requested_starts;
       par.v_0_frac = 0.40;
       if (ins.n <= 7000) {
          par.T_max = 10000;
@@ -2006,11 +2269,20 @@ int main(int argc, char* argv[]) {
       }
 
       par.time_limit_seconds = requested_time_limit;
+      if (const char* configured = std::getenv("FCBQP_EPOCH_LANES_PER_WORKER")) {
+         par.epoch_lanes_per_worker = parse_worker_count(
+            configured, "FCBQP_EPOCH_LANES_PER_WORKER"
+         );
+      }
+      const int configured_epoch_lanes = static_cast<int>(std::min<int64_t>(
+         requested_starts,
+         static_cast<int64_t>(requested_workers) * par.epoch_lanes_per_worker
+      ));
 
       const std::optional<Result> trivial_result = solve_trivial_cardinality(ins);
       std::vector<int> C1;
       if (!trivial_result.has_value()) {
-         const std::vector<double> impact = interaction_impact(ins);
+         const std::vector<double> impact = interaction_impact(ins, requested_workers);
          C1 = build_set(ins, par, impact);
       }
 
@@ -2027,6 +2299,10 @@ int main(int argc, char* argv[]) {
       std::cout << "Sense: " << objective_sense_name(sense) << "\n";
       std::cout << "Scale: " << print_scale_name(scale) << "\n";
       std::cout << "Runs: " << num_runs << "\n";
+      std::cout << "Workers: " << requested_workers << "\n";
+      std::cout << "Epoch lanes: " << configured_epoch_lanes << "\n";
+      std::cout << "Starts: " << requested_starts << "\n";
+      std::cout << "Parallel backend: " << parallel_backend_name() << "\n";
 
       if (best_known.loaded) {
          std::cout << "Best-known objective = " << std::fixed << std::setprecision(9) << best_known.objective << "\n";
@@ -2051,52 +2327,133 @@ int main(int argc, char* argv[]) {
             }
          }
          else {
-            SharedElite global_elite;
+            EliteState global_elite;
             global_elite.ones_count.assign(static_cast<size_t>(ins.n), 0);
-            publish_elite_snapshot(global_elite);
+            global_elite.construction_candidates = C1;
             std::atomic<bool> stop_requested(false);
             SearchControl control{ t0, par.time_limit_seconds, stop_requested };
 
-            #pragma omp parallel
-            {
-               const int tid = omp_get_thread_num();
-               const int num_threads = omp_get_num_threads();
+            const int worker_count = std::min(requested_workers, par.num_starts);
+            const int lane_count = std::min(configured_epoch_lanes, par.num_starts);
+            std::vector<int> lane_start_limits(static_cast<size_t>(lane_count));
+            std::vector<WorkerSearchState> lane_states;
+            lane_states.reserve(static_cast<size_t>(lane_count));
+            std::vector<std::exception_ptr> lane_errors(static_cast<size_t>(lane_count));
 
-               Params local_par = par;
-               const int base = par.num_starts / num_threads;
-               const int extra = par.num_starts % num_threads;
-
-               local_par.num_starts = base + (tid < extra ? 1 : 0);
-
+            const int base = par.num_starts / lane_count;
+            const int extra = par.num_starts % lane_count;
+            for (int lane_id = 0; lane_id < lane_count; ++lane_id) {
+               lane_start_limits[lane_id] = base + (lane_id < extra ? 1 : 0);
                const uint64_t run_seed = base_seed
                   + 0xD1B54A32D192ED03ULL * static_cast<uint64_t>(run)
-                  + 0x9E3779B97F4A7C15ULL * static_cast<uint64_t>(tid + 1);
+                  + 0x9E3779B97F4A7C15ULL * static_cast<uint64_t>(lane_id + 1);
+               lane_states.emplace_back(run_seed);
+            }
 
-               Result local_res = main_block(
-                  ins,
-                  local_par,
-                  run_seed,
-                  global_elite,
-                  C1,
-                  control,
-                  sense,
-                  scale,
-                  best_known
-               );
+            int search_epoch = 0;
+            while (true) {
+               bool have_active_lane = false;
+               for (int lane_id = 0; lane_id < lane_count; ++lane_id) {
+                  const WorkerSearchState& state = lane_states[lane_id];
+                  if (!state.finished && !state.result.reached_target &&
+                     state.starts_completed < lane_start_limits[lane_id]) {
+                     have_active_lane = true;
+                     break;
+                  }
+               }
+               if (!have_active_lane || control.should_stop()) break;
 
+               std::atomic<int> next_lane{ 0 };
+               parallel_for_workers(worker_count, [&](int) noexcept {
+                  while (true) {
+                     const int lane_id = next_lane.fetch_add(1, std::memory_order_relaxed);
+                     if (lane_id >= lane_count) break;
+                     WorkerSearchState& state = lane_states[lane_id];
+                     if (state.finished || state.result.reached_target ||
+                        state.starts_completed >= lane_start_limits[lane_id]) {
+                        continue;
+                     }
+                     try {
+                        run_worker_start(
+                           ins, par, state, global_elite, control, sense, scale, best_known
+                        );
+                     }
+                     catch (...) {
+                        lane_errors[lane_id] = std::current_exception();
+                        stop_requested.store(true, std::memory_order_relaxed);
+                     }
+                  }
+                  });
+
+               for (const std::exception_ptr& error : lane_errors) {
+                  if (error) std::rethrow_exception(error);
+               }
+
+               // All overdecomposed lanes in an epoch read the same immutable
+               // elite state. Merge in lane-id order so scheduling speed cannot
+               // affect the next snapshot or the search trajectory.
+               bool elite_changed = false;
+               for (int lane_id = 0; lane_id < lane_count; ++lane_id) {
+                  WorkerSearchState& state = lane_states[lane_id];
+                  if (state.candidate_ready) {
+                     elite_changed = try_insert_elite(
+                        ins,
+                        global_elite.pool,
+                        global_elite.ones_count,
+                        state.candidate_x,
+                        state.candidate_obj,
+                        par
+                     ) || elite_changed;
+                     state.candidate_ready = false;
+                     state.candidate_x.clear();
+                  }
+               }
+               if (elite_changed) {
+                  global_elite.construction_candidates = C1;
+                  for (int i = 0; i < ins.n; ++i) {
+                     if (global_elite.ones_count[i] > 0) {
+                        global_elite.construction_candidates.push_back(i);
+                     }
+                  }
+                  std::sort(
+                     global_elite.construction_candidates.begin(),
+                     global_elite.construction_candidates.end()
+                  );
+                  global_elite.construction_candidates.erase(
+                     std::unique(
+                        global_elite.construction_candidates.begin(),
+                        global_elite.construction_candidates.end()
+                     ),
+                     global_elite.construction_candidates.end()
+                  );
+               }
+
+               ++search_epoch;
+               bool epoch_reached_target = false;
+               for (const WorkerSearchState& state : lane_states) {
+                  epoch_reached_target = epoch_reached_target || state.result.reached_target;
+               }
+               if (epoch_reached_target) {
+                  global_res.target_epoch = search_epoch;
+                  break;
+               }
+            }
+
+            for (WorkerSearchState& state : lane_states) {
+               Result& local_res = state.result;
                const bool local_reached_target = local_res.reached_target && std::isfinite(local_res.time_to_target);
-               const double local_time_to_target = local_res.time_to_target;
-
-               #pragma omp critical(run_result_update)
-               {
-                  if (local_reached_target && (!run_reached_target || local_time_to_target < run_time_to_target)) {
-                     run_reached_target = true;
-                     run_time_to_target = local_time_to_target;
-                  }
-
-                  if (local_res.best_obj < global_res.best_obj) {
-                     global_res = std::move(local_res);
-                  }
+               if (local_reached_target && (!run_reached_target || local_res.time_to_target < run_time_to_target)) {
+                  run_reached_target = true;
+                  run_time_to_target = local_res.time_to_target;
+               }
+               const bool better_objective = local_res.best_obj < global_res.best_obj;
+               const bool canonical_tie = local_res.best_obj == global_res.best_obj &&
+                  !local_res.best_x.empty() &&
+                  (global_res.best_x.empty() || local_res.best_x < global_res.best_x);
+               if (better_objective || canonical_tie) {
+                  const int target_epoch = global_res.target_epoch;
+                  global_res = std::move(local_res);
+                  global_res.target_epoch = target_epoch;
                }
             }
          }
@@ -2132,13 +2489,15 @@ int main(int argc, char* argv[]) {
 
          if (global_res.reached_target) {
             std::cout << ", TTS to best-known (s) = "
-               << std::fixed << std::setprecision(6) << global_res.time_to_target;
+               << std::fixed << std::setprecision(6) << global_res.time_to_target
+               << ", target epoch = " << global_res.target_epoch;
          }
          else {
-            std::cout << ", TTS to best-known (s) = unknown";
+            std::cout << ", TTS to best-known (s) = unknown, target epoch = unknown";
          }
 
-         std::cout << ", time to run-best (s) = "
+         std::cout << ", start to run-best = " << global_res.start_to_best
+            << ", time to run-best (s) = "
             << std::fixed << std::setprecision(6) << global_res.time_to_best
             << ", runtime (s) = "
             << std::fixed << std::setprecision(6) << elapsed
@@ -2174,6 +2533,10 @@ int main(int argc, char* argv[]) {
       std::cout << "Instance name = " << instance_name << "\n";
       std::cout << "Best-known obj from CSV = " << (best_known.loaded ? best_known_str : "") << "\n";
       std::cout << "Best found obj = " << std::fixed << std::setprecision(9) << best_output_obj << "\n";
+      std::ostringstream fingerprint;
+      fingerprint << std::hex << std::setw(16) << std::setfill('0')
+         << solution_fingerprint(best_run_res.best_x);
+      std::cout << "Solution fingerprint = " << fingerprint.str() << "\n";
       std::cout << "Runtime limit: " << static_cast<int>(par.time_limit_seconds) << " seconds\n";
       std::cout << "Average obj = " << std::fixed << std::setprecision(9) << average_obj << "\n";
       std::cout << "Average TTS = " << average_tts_str << "\n";

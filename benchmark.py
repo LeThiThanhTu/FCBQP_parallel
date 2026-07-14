@@ -36,10 +36,22 @@ def main() -> int:
     parser.add_argument("phase", help="output name, e.g. baseline or optimized")
     parser.add_argument("--executable", default="build/main")
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--starts", type=int, default=200000,
+                        help="deterministic total start budget")
+    parser.add_argument("--epoch-lanes-per-worker", type=int, default=4,
+                        help="deterministic overdecomposition factor")
     parser.add_argument("--solver-time-limit", type=float, default=90.0)
     parser.add_argument("--timeout", type=float, default=105.0,
                         help="external per-process safety timeout")
     args = parser.parse_args()
+    if args.threads <= 0:
+        parser.error("--threads must be positive")
+    if args.starts <= 0:
+        parser.error("--starts must be positive")
+    if args.epoch_lanes_per_worker <= 0:
+        parser.error("--epoch-lanes-per-worker must be positive")
+    if args.solver_time_limit < 0:
+        parser.error("--solver-time-limit must be nonnegative")
 
     root = Path(__file__).resolve().parent
     out_dir = root / "benchmark_results"
@@ -49,13 +61,16 @@ def main() -> int:
     executable = (root / args.executable).resolve()
     best_known = root / "best_known_results.csv"
     env = os.environ.copy()
-    env["OMP_NUM_THREADS"] = str(args.threads)
+    env.pop("OMP_NUM_THREADS", None)
+    env["FCBQP_NUM_THREADS"] = str(args.threads)
+    env["FCBQP_EPOCH_LANES_PER_WORKER"] = str(args.epoch_lanes_per_worker)
 
     rows: list[dict[str, str]] = []
     for position, (name, sense, scale, relative_instance) in enumerate(CASES, 1):
         command = [
             str(executable), sense, scale, str(root / relative_instance),
             str(best_known), "1", "1", str(args.solver_time_limit),
+            "auto", str(args.threads), str(args.starts),
         ]
         started = time.perf_counter()
         status = "completed"
@@ -97,13 +112,25 @@ def main() -> int:
             "path": relative_instance,
             "sense": sense,
             "scale": scale,
+            "base_seed": "1",
+            "runs": "1",
+            "workers": str(args.threads),
+            "epoch_lanes_per_worker": str(args.epoch_lanes_per_worker),
+            "epoch_lanes": capture(r"Epoch lanes: ([^\n]+)", stdout),
+            "starts": str(args.starts),
+            "solver_time_limit": str(args.solver_time_limit),
             "status": status,
             "returncode": returncode,
             "storage": capture(r"storage = ([^,\n]+)", combined),
+            "parallel_backend": capture(r"Parallel backend: ([^\n]+)", stdout),
             "best_known": capture(r"Best-known objective = ([^\n]+)", stdout),
             "best_found": capture(r"Run 1/1: best objective = ([^,\n]+)", stdout),
             "reached_best_known": capture(r"reached best-known = (YES|NO)", stdout),
             "tts_seconds": capture(r"TTS to best-known \(s\) = ([^,\n]+)", stdout),
+            "target_epoch": capture(r"target epoch = ([^,\n]+)", stdout),
+            "start_to_best": capture(r"start to run-best = ([^,\n]+)", stdout),
+            "solution_fingerprint": capture(r"Solution fingerprint = ([^\n]+)", stdout),
+            "selected_vars": capture(r"Selected vars of best run: ?([^\n]*)", stdout),
             "solver_runtime_seconds": capture(r"runtime \(s\) = ([^\n]+)", stdout),
             "wall_seconds": f"{wall_seconds:.6f}",
         }
