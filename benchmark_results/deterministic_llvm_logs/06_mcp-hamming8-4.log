@@ -3,18 +3,20 @@ Sense: max
 Scale: full
 Runs: 1
 Workers: 4
+Epoch lanes: 4
 Starts: 4
 Parallel backend: C++20 PSTL/libdispatch
 Best-known objective = 240.000000000
-Run 1/1: best objective = 240.000000000, reached best-known = YES, TTS to best-known (s) = 0.000238, target epoch = 1, start to run-best = 1, time to run-best (s) = 0.000249, runtime (s) = 0.000282
+Run 1/1: best objective = 240.000000000, reached best-known = YES, TTS to best-known (s) = 0.000098, target epoch = 1, start to run-best = 1, time to run-best (s) = 0.000099, runtime (s) = 0.000111
+Logical work: deterministic frontier = 84
 
 Summary over 1 runs
 Instance name = hamming8-4_m16
 Best-known obj from CSV = 240.000000000
 Best found obj = 240.000000000
-Solution fingerprint = e28dc85d19ec91b9
+Solution fingerprint = 301341b580198229
 Runtime limit: 0 seconds
 Average obj = 240.000000000
-Average TTS = 0.000238
+Average TTS = 0.000098
 Times reaching best-known = 1
-Selected vars of best run: 20 29 39 42 65 80 118 123 134 139 177 192 215 218 228 237
+Selected vars of best run: 7 18 44 61 78 91 97 120 137 160 166 179 196 213 239 250

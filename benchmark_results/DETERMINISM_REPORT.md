@@ -19,21 +19,24 @@ independent schedule or standard-library dependencies:
   execute against the same read-only elite state; after the Parallel STL call
   completes, candidates are merged in lane-ID order. Physical workers claim
   lanes dynamically, so load balancing cannot change the merge order.
-- A target ends the search only at an epoch boundary, after every lane in
-  that epoch has completed. Target detection no longer cancels other workers
-  based on wall-clock order.
-- Fisher-Yates shuffling and bounded sampling are implemented directly from
-  the standardized `std::mt19937_64` output using rejection sampling.
-- Candidate selection uses `std::nth_element` with a total comparator followed
-  by a sorted selected prefix. Explicit index tie-breakers make the selected
-  set and order independent of the library's partitioning strategy. Elite and
-  preprocessing sorts also have total tie-breakers.
+- A lane that reaches the target publishes its logical-work counter as an
+  epoch-local cutoff. Other lanes stop at the same algorithmic frontier, and
+  results produced beyond a subsequently lowered cutoff are discarded before
+  the lane-order merge. Target detection therefore does not cancel or retain
+  work based on wall-clock order.
+- Fisher-Yates shuffling and low-bit rejection sampling are implemented
+  directly from the standardized `std::mt19937_64` output. This preserves the
+  fast libc++ trajectory without depending on a library distribution class.
+- Candidate selection uses a fully specified `nth_element` implementation.
+  The heuristic samples the selected prefix, so merely giving library
+  `std::nth_element` a total comparator would not specify the prefix's internal
+  order across standard libraries.
 - GCC and Clang builds disable floating-point contraction so an FMA decision
   cannot change a heuristic comparison.
 - The CLI accepts a deterministic total `starts` budget. Benchmark CSVs record
   the seed, worker count, epoch-lane factor and count, start budget, target
-  epoch, logical start-to-best, complete selected-variable list, and a stable
-  solution fingerprint.
+  epoch, logical start-to-best, deterministic logical-work frontier, complete
+  selected-variable list, and a stable solution fingerprint.
 - The default worker count is fixed at four instead of using detected hardware
   concurrency; `FCBQP_NUM_THREADS` or the CLI can still override it explicitly.
 
@@ -61,21 +64,19 @@ The ten benchmark cases were run with four workers, four total starts, and no
 internal time limit using both LLVM 22.1.8/libdispatch and GCC 16.1/TBB.
 
 The current optimized LLVM and GCC executions matched in every invariant field
-on all ten cases, including exact selected-variable lists and fingerprints.
-The automated CSV comparison checks 21 invariant fields per case. Portable,
-LTO/native, and PGO builds also matched. As expected, elapsed times differed.
+on all ten cases, including exact selected-variable lists, fingerprints, and
+logical-work frontiers. The automated CSV comparison checks 22 invariant
+fields per case. As expected, elapsed times differed.
 
-- Original LLVM runs: 3.632707 s and 3.661088 s total harness wall time.
-- Original GCC runs: 2.565740 s and 2.603787 s total harness wall time.
-- Current optimized runs: 0.975575 s for LLVM and 1.165824 s for GCC.
-
-Additional multi-epoch checks with one lane per worker reproduced the original
-trajectory exactly:
-
-- MDG-a n=2000, 12 starts: objective 114230, logical start 3, fingerprint
-  `1f236c29b1a7ea28` with both compilers.
-- `crack`, 8 starts: objective 1842, logical start 1, fingerprint
-  `08bdf7b88fa4aaf1` with both compilers.
+- Current four-start LLVM harness wall total: 1.046053 seconds.
+- Current four-start GCC harness wall total: 1.169222 seconds.
+- MDG-a n=2000: objective 114271, logical start 1, fingerprint
+  `90f897278dfc330f` with both compilers.
+- `crack`: objective 566, logical start 1, fingerprint `56088a91a3571268`
+  and logical frontier 86768 with both compilers.
+- A scheduling test delays lane 0 and lane 1 independently by 20 ms and checks
+  that the result, target epoch/start, fingerprint, and logical frontier remain
+  identical.
 
 Run the permanent cross-compiler check with:
 
@@ -83,7 +84,7 @@ Run the permanent cross-compiler check with:
 make check-determinism
 ```
 
-The original raw fixed-work results are in `deterministic_llvm.csv` and
-`deterministic_gcc.csv`; current results are in `optimization_after_llvm.csv`
-and `optimization_after_gcc.csv`. `tests/compare_benchmarks.py` performs the
-invariant comparison.
+The current raw fixed-work results are in `deterministic_llvm.csv` and
+`deterministic_gcc.csv`. `tests/compare_benchmarks.py` performs the invariant
+comparison. The counter-scheduler implementation and the current `stl` branch
+comparison are documented in `COUNTER_SCHEDULER_REPORT.md`.

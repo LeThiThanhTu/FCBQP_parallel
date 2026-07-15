@@ -1,0 +1,16 @@
+Data type = 2, n = 125, k = 34, input entries = 6963, full nnz = 13926, density = 89.126400%, storage = dense matrix, symmetric pairs supplied twice = 0, index base = 1-based
+Sense: max
+Scale: full
+Runs: 1
+Best-known objective = 1122.000000000
+Run 1/1: best objective = 1122.000000000, reached best-known = YES, TTS to best-known (s) = 0.000091, time to run-best (s) = 0.000092, runtime (s) = 0.000111
+
+Summary over 1 runs
+Instance name = C125.9_m34
+Best-known obj from CSV = 1122.000000000
+Best found obj = 1122.000000000
+Runtime limit: 15 seconds
+Average obj = 1122.000000000
+Average TTS = 0.000091
+Times reaching best-known = 1
+Selected vars of best run: 1 2 5 7 11 18 19 25 29 31 34 44 45 48 49 68 70 71 77 79 82 85 91 92 98 101 110 114 115 116 117 121 122 125

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -20,6 +21,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -66,7 +68,7 @@ struct Params {
    int t_alpha = 15;
    int v_1 = 40;
    int v_2 = 40;
-   int epoch_lanes_per_worker = 4;
+   int epoch_lanes_per_worker = 1;
    double d_frac = 0.2;
    double time_limit_seconds = 600.0;
 };
@@ -138,12 +140,70 @@ static inline bool time_limit_reached(
    return elapsed >= time_limit_seconds;
 }
 
+struct DeterministicTargetControl {
+   std::atomic<uint64_t> logical_cutoff{ std::numeric_limits<uint64_t>::max() };
+
+   void publish(uint64_t logical_work) {
+      uint64_t current = logical_cutoff.load(std::memory_order_relaxed);
+      while (logical_work < current &&
+         !logical_cutoff.compare_exchange_weak(
+            current,
+            logical_work,
+            std::memory_order_release,
+            std::memory_order_relaxed
+         )) {
+      }
+   }
+};
+
+struct LogicalWorkContext {
+   DeterministicTargetControl* target = nullptr;
+   uint64_t* epoch_work = nullptr;
+};
+
+static thread_local LogicalWorkContext* active_logical_work = nullptr;
+
+class LogicalWorkScope {
+public:
+   explicit LogicalWorkScope(LogicalWorkContext& context)
+      : previous_(active_logical_work) {
+      active_logical_work = &context;
+   }
+
+   ~LogicalWorkScope() { active_logical_work = previous_; }
+
+   LogicalWorkScope(const LogicalWorkScope&) = delete;
+   LogicalWorkScope& operator=(const LogicalWorkScope&) = delete;
+
+private:
+   LogicalWorkContext* previous_;
+};
+
+void account_logical_work(uint64_t amount = 1) {
+   if (active_logical_work == nullptr || amount == 0) return;
+   *active_logical_work->epoch_work += amount;
+}
+
+bool deterministic_target_stop_requested() {
+   if (active_logical_work == nullptr) return false;
+   const uint64_t cutoff = active_logical_work->target->logical_cutoff.load(
+      std::memory_order_acquire
+   );
+   return *active_logical_work->epoch_work >= cutoff;
+}
+
+void publish_deterministic_target() {
+   if (active_logical_work == nullptr) return;
+   active_logical_work->target->publish(*active_logical_work->epoch_work);
+}
+
 struct SearchControl {
    const std::chrono::steady_clock::time_point& t_start;
    double time_limit_seconds;
    std::atomic<bool>& stop_requested;
 
    bool should_stop() const {
+      if (deterministic_target_stop_requested()) return true;
       if (stop_requested.load(std::memory_order_relaxed)) return true;
       if (!time_limit_reached(t_start, time_limit_seconds)) return false;
       stop_requested.store(true, std::memory_order_relaxed);
@@ -168,6 +228,20 @@ int default_worker_count() {
       return parse_worker_count(configured, "FCBQP_NUM_THREADS");
    }
    return 4;
+}
+
+void apply_schedule_test_delay(int lane_id) {
+   static const int delayed_lane = [] {
+      const char* value = std::getenv("FCBQP_TEST_DELAY_LANE");
+      return value == nullptr ? -1 : std::atoi(value);
+      }();
+   static const int delay_microseconds = [] {
+      const char* value = std::getenv("FCBQP_TEST_DELAY_US");
+      return value == nullptr ? 0 : std::max(0, std::atoi(value));
+      }();
+   if (lane_id == delayed_lane && delay_microseconds > 0) {
+      std::this_thread::sleep_for(std::chrono::microseconds(delay_microseconds));
+   }
 }
 
 const char* parallel_backend_name() {
@@ -220,24 +294,34 @@ uint64_t bounded_random(DeterministicRng& rng, uint64_t bound) {
    if (bound == 0) {
       throw std::logic_error("bounded_random requires a positive bound.");
    }
+   if (bound == 1) return 0;
 
-   // Rejection sampling maps the standardized mt19937_64 output to a bounded
-   // integer without depending on a standard-library distribution algorithm.
-   const uint64_t rejection_limit = (uint64_t{ 0 } - bound) % bound;
+   // Draw the minimum number of low-order random bits and reject the unused
+   // tail.  This explicitly specifies the mapping used by the fast libc++
+   // uniform_int_distribution path without depending on a standard-library
+   // implementation, so GCC and Clang consume the same mt19937_64 stream.
+   const unsigned bits = std::bit_width(bound - 1);
+   const uint64_t mask = (bits == 64U)
+      ? std::numeric_limits<uint64_t>::max()
+      : ((uint64_t{ 1 } << bits) - 1U);
    uint64_t value = 0;
    do {
-      value = rng();
-   } while (value < rejection_limit);
-   return value % bound;
+      value = rng() & mask;
+   } while (value >= bound);
+   return value;
 }
 
 template <class RandomAccessIterator>
 void deterministic_shuffle(RandomAccessIterator first, RandomAccessIterator last, DeterministicRng& rng) {
    using Difference = typename std::iterator_traits<RandomAccessIterator>::difference_type;
    const Difference size = last - first;
-   for (Difference i = size; i > 1; --i) {
-      const Difference selected = static_cast<Difference>(bounded_random(rng, static_cast<uint64_t>(i)));
-      std::iter_swap(first + (i - 1), first + selected);
+   if (size <= 1) return;
+   Difference remaining = size - 1;
+   for (Difference position = 0; position < size - 1; ++position, --remaining) {
+      const Difference offset = static_cast<Difference>(
+         bounded_random(rng, static_cast<uint64_t>(remaining + 1))
+      );
+      if (offset != 0) std::iter_swap(first + position, first + position + offset);
    }
 }
 
@@ -1158,13 +1242,183 @@ static int tabu_tenure_T(int T_nimp, const Params& par) {
    return T;
 }
 
+// A fully specified nth-element implementation.  The partition layout is
+// intentionally the same on libc++ and libstdc++ because the heuristic draws
+// a random element from the selected prefix; the standard only specifies the
+// partition, not the order inside that prefix.
+template <class RandomAccessIterator, class Compare>
+bool deterministic_sort3(
+   RandomAccessIterator x,
+   RandomAccessIterator y,
+   RandomAccessIterator z,
+   Compare compare
+) {
+   if (!compare(*y, *x)) {
+      if (!compare(*z, *y)) return false;
+      std::iter_swap(y, z);
+      if (compare(*y, *x)) std::iter_swap(x, y);
+      return true;
+   }
+   if (compare(*z, *y)) {
+      std::iter_swap(x, z);
+      return true;
+   }
+   std::iter_swap(x, y);
+   if (compare(*z, *y)) std::iter_swap(y, z);
+   return true;
+}
+
+template <class RandomAccessIterator, class Compare>
+void deterministic_selection_sort(
+   RandomAccessIterator first,
+   RandomAccessIterator last,
+   Compare compare
+) {
+   for (RandomAccessIterator current = first; current != last; ++current) {
+      RandomAccessIterator best = current;
+      for (RandomAccessIterator candidate = current + 1; candidate != last; ++candidate) {
+         if (compare(*candidate, *best)) best = candidate;
+      }
+      if (best != current) std::iter_swap(current, best);
+   }
+}
+
+template <class RandomAccessIterator, class Compare>
+bool deterministic_nth_find_guard(
+   RandomAccessIterator& lower,
+   RandomAccessIterator& upper,
+   RandomAccessIterator middle,
+   Compare compare
+) {
+   while (true) {
+      if (lower == --upper) return false;
+      if (compare(*upper, *middle)) return true;
+   }
+}
+
+template <class RandomAccessIterator, class Compare>
+void deterministic_nth_element(
+   RandomAccessIterator first,
+   RandomAccessIterator nth,
+   RandomAccessIterator last,
+   Compare compare
+) {
+   constexpr typename std::iterator_traits<RandomAccessIterator>::difference_type small_limit = 7;
+   while (true) {
+      if (nth == last) return;
+      const auto length = last - first;
+      if (length <= 1) return;
+      if (length == 2) {
+         if (compare(*(last - 1), *first)) std::iter_swap(first, last - 1);
+         return;
+      }
+      if (length == 3) {
+         deterministic_sort3(first, first + 1, last - 1, compare);
+         return;
+      }
+      if (length <= small_limit) {
+         deterministic_selection_sort(first, last, compare);
+         return;
+      }
+
+      RandomAccessIterator middle = first + length / 2;
+      RandomAccessIterator last_element = last - 1;
+      unsigned swaps = deterministic_sort3(first, middle, last_element, compare) ? 1U : 0U;
+      RandomAccessIterator lower = first;
+      RandomAccessIterator upper = last_element;
+
+      if (!compare(*lower, *middle)) {
+         if (deterministic_nth_find_guard(lower, upper, middle, compare)) {
+            std::iter_swap(lower, upper);
+            ++swaps;
+         }
+         else {
+            ++lower;
+            upper = last;
+            if (!compare(*first, *--upper)) {
+               while (true) {
+                  if (lower == upper) return;
+                  if (compare(*first, *lower)) {
+                     std::iter_swap(lower, upper);
+                     ++swaps;
+                     ++lower;
+                     break;
+                  }
+                  ++lower;
+               }
+            }
+            if (lower == upper) return;
+            while (true) {
+               while (!compare(*first, *lower)) ++lower;
+               do {
+                  --upper;
+               } while (compare(*first, *upper));
+               if (lower >= upper) break;
+               std::iter_swap(lower, upper);
+               ++swaps;
+               ++lower;
+            }
+            if (nth < lower) return;
+            first = lower;
+            continue;
+         }
+      }
+
+      ++lower;
+      if (lower < upper) {
+         while (true) {
+            while (compare(*lower, *middle)) ++lower;
+            do {
+               --upper;
+            } while (!compare(*upper, *middle));
+            if (lower >= upper) break;
+            std::iter_swap(lower, upper);
+            ++swaps;
+            if (middle == lower) middle = upper;
+            ++lower;
+         }
+      }
+      if (lower != middle && compare(*middle, *lower)) {
+         std::iter_swap(lower, middle);
+         ++swaps;
+      }
+      if (nth == lower) return;
+
+      if (swaps == 0) {
+         if (nth < lower) {
+            RandomAccessIterator previous = first;
+            RandomAccessIterator current = first;
+            while (true) {
+               if (++current == lower) return;
+               if (compare(*current, *previous)) break;
+               previous = current;
+            }
+         }
+         else {
+            RandomAccessIterator previous = lower;
+            RandomAccessIterator current = lower;
+            while (true) {
+               if (++current == last) return;
+               if (compare(*current, *previous)) break;
+               previous = current;
+            }
+         }
+      }
+      if (nth < lower) {
+         last = lower;
+      }
+      else {
+         first = lower + 1;
+      }
+   }
+}
+
 template <class Compare>
 void select_candidate_prefix(std::vector<int>& candidates, int keep, Compare compare) {
    if (keep >= static_cast<int>(candidates.size())) return;
    auto middle = candidates.begin() + keep;
-   std::nth_element(candidates.begin(), middle, candidates.end(), compare);
+   deterministic_nth_element(candidates.begin(), middle, candidates.end(), compare);
    candidates.resize(static_cast<size_t>(keep));
-   std::sort(candidates.begin(), candidates.end(), compare);
 }
 
 struct IncomingCandidate {
@@ -1408,6 +1662,7 @@ void tabu_search(
 
       if (target_reached(output_obj, best_known.objective, sense)) {
          res.reached_target = true;
+         publish_deterministic_target();
 
          auto t_now = std::chrono::steady_clock::now();
          res.time_to_target =
@@ -1431,6 +1686,7 @@ void tabu_search(
 
    for (int iter = 0; iter < par.T_max; ++iter) {
       if (control.should_stop()) break;
+      account_logical_work();
       if (ones.empty() || zeros.empty()) {
          break;
       }
@@ -1443,12 +1699,10 @@ void tabu_search(
       const int num_cand_in = std::min(par.v_2, static_cast<int>(cand_in.size()));
 
       select_candidate_prefix(cand_out, num_cand_out, [&](int a, int b) {
-         if (h[a] != h[b]) return h[a] > h[b];
-         return a < b;
+         return h[a] > h[b];
          });
       select_candidate_prefix(cand_in, num_cand_in, [&](int a, int b) {
-         if (h[a] != h[b]) return h[a] < h[b];
-         return a < b;
+         return h[a] < h[b];
          });
 
       const MoveChoice move = ins.sparse
@@ -1564,6 +1818,7 @@ std::vector<int> path_relink_one_direction(
 
    while (!remove_set.empty() && !add_set.empty()) {
       if (control.should_stop()) break;
+      account_logical_work();
       const int A = std::min(par.v_1, static_cast<int>(remove_set.size()));
       const int B = std::min(par.v_2, static_cast<int>(add_set.size()));
 
@@ -1807,14 +2062,14 @@ SearchPoint random_greedy_construction(
       double gain;
    };
    const auto add_move_less = [](const AddMove& a, const AddMove& b) {
-      if (a.gain != b.gain) return a.gain < b.gain;
-      return a.i < b.i;
+      return a.gain < b.gain;
       };
    std::vector<AddMove> moves;
    moves.reserve(static_cast<size_t>(n));
 
    for (int attempt = 0; attempt < max_attempts; ++attempt) {
       if (control.should_stop()) return {};
+      account_logical_work();
       std::vector<int> x(n, 0);
       std::vector<int> cand_attempt = cand;
       deterministic_shuffle(cand_attempt.begin(), cand_attempt.end(), rng);
@@ -1843,6 +2098,7 @@ SearchPoint random_greedy_construction(
             }
             return { std::move(x), std::move(h), obj };
          }
+         account_logical_work();
          moves.clear();
 
          for (int i = 0; i < n; ++i) {
@@ -1859,9 +2115,8 @@ SearchPoint random_greedy_construction(
          int R = std::min(20, static_cast<int>(moves.size()));
          if (R < static_cast<int>(moves.size())) {
             auto middle = moves.begin() + R;
-            std::nth_element(moves.begin(), middle, moves.end(), add_move_less);
+            deterministic_nth_element(moves.begin(), middle, moves.end(), add_move_less);
             moves.resize(static_cast<size_t>(R));
-            std::sort(moves.begin(), moves.end(), add_move_less);
          }
 
          const AddMove selected = moves[static_cast<size_t>(bounded_random(rng, static_cast<uint64_t>(R)))];
@@ -1980,6 +2235,7 @@ std::vector<int> elite_based_restart(
 
    for (int attempt = 0; attempt < max_attempts; ++attempt) {
       if (control.should_stop()) return {};
+      account_logical_work();
       std::vector<int> x(n, 0);
       for (int i : fixed_ones) {
          x[i] = 1;
@@ -2031,6 +2287,7 @@ std::vector<int> random_diverse_restart(
 
    for (int attempt = 0; attempt < max_attempts; ++attempt) {
       if (control.should_stop()) return {};
+      account_logical_work();
       deterministic_shuffle(idx.begin(), idx.end(), rng);
       std::vector<int> x(n, 0);
       for (int t = 0; t < k; ++t) {
@@ -2064,6 +2321,9 @@ struct WorkerSearchState {
 
    DeterministicRng rng;
    Result result;
+   Result epoch_baseline_result;
+   uint64_t epoch_work = 0;
+   bool epoch_participated = false;
    int no_improve = 0;
    int starts_completed = 0;
    bool finished = false;
@@ -2078,15 +2338,27 @@ void run_worker_start(
    const Instance& ins,
    const Params& par,
    WorkerSearchState& state,
+   int lane_id,
    const EliteState& elite_state,
+   DeterministicTargetControl& target_control,
    const SearchControl& control,
    ObjectiveSense sense,
    PrintScale scale,
    const BestKnownObjective& best_known
 ) {
+   apply_schedule_test_delay(lane_id);
    state.candidate_ready = false;
+   state.epoch_participated = true;
+   state.epoch_work = 0;
+   state.epoch_baseline_result = state.result;
+   LogicalWorkContext logical_context{
+      &target_control,
+      &state.epoch_work
+   };
+   LogicalWorkScope logical_scope(logical_context);
    if (state.finished || state.result.reached_target || control.should_stop()) return;
 
+   account_logical_work();
    const int start = state.starts_completed++;
    const std::vector<EliteSol>& elite_snapshot = elite_state.pool;
 
@@ -2158,6 +2430,7 @@ void run_worker_start(
       if (best_known.loaded && target_reached(output_obj, best_known.objective, sense)) {
          if (!state.result.reached_target) {
             state.result.reached_target = true;
+            publish_deterministic_target();
             const auto t_target_now = std::chrono::steady_clock::now();
             state.result.time_to_target =
                std::chrono::duration<double>(t_target_now - control.t_start).count();
@@ -2316,6 +2589,7 @@ int main(int argc, char* argv[]) {
 
          Result global_res;
          global_res.best_obj = std::numeric_limits<double>::infinity();
+         uint64_t deterministic_logical_work = 0;
          bool run_reached_target = false;
          double run_time_to_target = std::numeric_limits<double>::infinity();
          if (trivial_result.has_value()) {
@@ -2363,6 +2637,11 @@ int main(int argc, char* argv[]) {
                }
                if (!have_active_lane || control.should_stop()) break;
 
+               for (WorkerSearchState& state : lane_states) {
+                  state.epoch_participated = false;
+                  state.epoch_work = 0;
+               }
+               DeterministicTargetControl epoch_target;
                std::atomic<int> next_lane{ 0 };
                parallel_for_workers(worker_count, [&](int) noexcept {
                   while (true) {
@@ -2375,7 +2654,16 @@ int main(int argc, char* argv[]) {
                      }
                      try {
                         run_worker_start(
-                           ins, par, state, global_elite, control, sense, scale, best_known
+                           ins,
+                           par,
+                           state,
+                           lane_id,
+                           global_elite,
+                           epoch_target,
+                           control,
+                           sense,
+                           scale,
+                           best_known
                         );
                      }
                      catch (...) {
@@ -2387,6 +2675,40 @@ int main(int argc, char* argv[]) {
 
                for (const std::exception_ptr& error : lane_errors) {
                   if (error) std::rethrow_exception(error);
+               }
+
+               const uint64_t target_cutoff = epoch_target.logical_cutoff.load(
+                  std::memory_order_acquire
+               );
+               for (const WorkerSearchState& state : lane_states) {
+                  if (!state.epoch_participated) continue;
+                  deterministic_logical_work +=
+                     (target_cutoff == std::numeric_limits<uint64_t>::max())
+                     ? state.epoch_work
+                     : std::min(state.epoch_work, target_cutoff);
+               }
+               if (target_cutoff != std::numeric_limits<uint64_t>::max()) {
+                  for (WorkerSearchState& state : lane_states) {
+                     // A lane that crossed the logical target frontier before
+                     // observing it must not make the result depend on physical
+                     // scheduling speed. Its current-start result and elite
+                     // event are discarded; previously committed epochs remain.
+                     if (state.epoch_work > target_cutoff) {
+                        state.result = state.epoch_baseline_result;
+                        state.candidate_ready = false;
+                        state.candidate_x.clear();
+                     }
+                  }
+               }
+
+               ++search_epoch;
+               bool epoch_reached_target = false;
+               for (const WorkerSearchState& state : lane_states) {
+                  epoch_reached_target = epoch_reached_target || state.result.reached_target;
+               }
+               if (epoch_reached_target) {
+                  global_res.target_epoch = search_epoch;
+                  break;
                }
 
                // All overdecomposed lanes in an epoch read the same immutable
@@ -2428,15 +2750,6 @@ int main(int argc, char* argv[]) {
                   );
                }
 
-               ++search_epoch;
-               bool epoch_reached_target = false;
-               for (const WorkerSearchState& state : lane_states) {
-                  epoch_reached_target = epoch_reached_target || state.result.reached_target;
-               }
-               if (epoch_reached_target) {
-                  global_res.target_epoch = search_epoch;
-                  break;
-               }
             }
 
             for (WorkerSearchState& state : lane_states) {
@@ -2502,6 +2815,8 @@ int main(int argc, char* argv[]) {
             << ", runtime (s) = "
             << std::fixed << std::setprecision(6) << elapsed
             << "\n";
+         std::cout << "Logical work: deterministic frontier = "
+            << deterministic_logical_work << "\n";
       }
 
       double sum_obj = 0.0;

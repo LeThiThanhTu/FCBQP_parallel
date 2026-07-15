@@ -1,0 +1,22 @@
+Data type = 1, n = 500, k = 50, input entries = 124750, full nnz = 249498, density = 99.799200%, storage = dense matrix, symmetric pairs supplied twice = 0, index base = 0-based
+Sense: max
+Scale: half
+Runs: 1
+Workers: 4
+Epoch lanes: 4
+Starts: 200000
+Parallel backend: C++20 PSTL/libdispatch
+Best-known objective = 778030.570000000
+Run 1/1: best objective = 778030.570000001, reached best-known = YES, TTS to best-known (s) = 0.004062, target epoch = 1, start to run-best = 1, time to run-best (s) = 0.004062, runtime (s) = 0.004742
+Logical work: deterministic frontier = 1420
+
+Summary over 1 runs
+Instance name = MDG-b_1_n500_m50
+Best-known obj from CSV = 778030.570000000
+Best found obj = 778030.570000001
+Solution fingerprint = 2a8393a7246fde4a
+Runtime limit: 15 seconds
+Average obj = 778030.570000001
+Average TTS = 0.004062
+Times reaching best-known = 1
+Selected vars of best run: 1 23 28 31 43 71 76 78 92 99 101 128 140 180 187 209 225 228 234 253 257 268 270 278 290 313 317 319 324 346 356 362 375 385 391 398 413 415 427 434 440 444 445 458 459 469 482 491 493 497

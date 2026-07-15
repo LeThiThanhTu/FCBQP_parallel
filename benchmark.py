@@ -38,11 +38,16 @@ def main() -> int:
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--starts", type=int, default=200000,
                         help="deterministic total start budget")
-    parser.add_argument("--epoch-lanes-per-worker", type=int, default=4,
+    parser.add_argument("--epoch-lanes-per-worker", type=int, default=1,
                         help="deterministic overdecomposition factor")
     parser.add_argument("--solver-time-limit", type=float, default=90.0)
     parser.add_argument("--timeout", type=float, default=105.0,
                         help="external per-process safety timeout")
+    parser.add_argument(
+        "--legacy-interface",
+        action="store_true",
+        help="omit codex-only index-base, worker, and start arguments",
+    )
     args = parser.parse_args()
     if args.threads <= 0:
         parser.error("--threads must be positive")
@@ -70,8 +75,9 @@ def main() -> int:
         command = [
             str(executable), sense, scale, str(root / relative_instance),
             str(best_known), "1", "1", str(args.solver_time_limit),
-            "auto", str(args.threads), str(args.starts),
         ]
+        if not args.legacy_interface:
+            command.extend(["auto", str(args.threads), str(args.starts)])
         started = time.perf_counter()
         status = "completed"
         stdout = ""
@@ -129,6 +135,9 @@ def main() -> int:
             "tts_seconds": capture(r"TTS to best-known \(s\) = ([^,\n]+)", stdout),
             "target_epoch": capture(r"target epoch = ([^,\n]+)", stdout),
             "start_to_best": capture(r"start to run-best = ([^,\n]+)", stdout),
+            "logical_work": capture(
+                r"Logical work: deterministic frontier = ([^\n]+)", stdout
+            ),
             "solution_fingerprint": capture(r"Solution fingerprint = ([^\n]+)", stdout),
             "selected_vars": capture(r"Selected vars of best run: ?([^\n]*)", stdout),
             "solver_runtime_seconds": capture(r"runtime \(s\) = ([^\n]+)", stdout),

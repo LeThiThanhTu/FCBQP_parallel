@@ -7,6 +7,10 @@ epoch model, and builds with both LLVM 22.1.8/libdispatch and GCC 16.1/TBB.
 Measurements use four physical workers, base seed 1, one run, a fixed four-start
 budget, and no wall-clock limit unless stated otherwise.
 
+This report records the preceding optimization phase. The later logical target
+cutoff, specified candidate partition, new one-lane default, and current `stl`
+comparison are documented in `COUNTER_SCHEDULER_REPORT.md`.
+
 The before data is in `deterministic_llvm.csv` and `deterministic_gcc.csv`.
 The final portable Release data is in `optimization_after_llvm.csv` and
 `optimization_after_gcc.csv`. LTO/native and PGO results are in the matching

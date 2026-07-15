@@ -137,12 +137,13 @@ different core counts from silently defining different searches. The solver
 prints the selected Parallel STL backend at startup. `starts` is the
 deterministic total search-start budget and defaults to 200000.
 
-Each deterministic epoch is overdecomposed into four logical lanes per worker
-by default. Physical workers dynamically claim lanes, while results are merged
-in lane-ID order. This improves load balance without allowing scheduling order
-to affect the solution. Set `FCBQP_EPOCH_LANES_PER_WORKER` to a positive
-integer to change the factor; because it changes the seeded search streams, it
-is part of the deterministic configuration.
+Each deterministic epoch uses one logical lane per worker by default. Physical
+workers dynamically claim lanes, while results are merged in lane-ID order.
+The solver exchanges a deterministic logical-work cutoff when a lane reaches
+the target, so other lanes stop at the same algorithmic frontier rather than
+at a speed-dependent wall-clock point. Set `FCBQP_EPOCH_LANES_PER_WORKER` to a
+positive integer to overdecompose the search; because it changes the seeded
+search streams, it is part of the deterministic configuration.
 
 ## Determinism
 
@@ -174,6 +175,9 @@ The LLVM/libdispatch versus GCC/TBB comparison is documented in
 `benchmark_results/COMPILER_REPORT.md`.
 The current parser, kernel, deterministic overdecomposition, LTO/native, and
 PGO measurements are documented in `benchmark_results/OPTIMIZATION_REPORT.md`.
+The deterministic logical-counter scheduler and current comparison against the
+`stl` branch are documented in
+`benchmark_results/COUNTER_SCHEDULER_REPORT.md`.
 
 Benchmark settings can be overridden without editing files:
 

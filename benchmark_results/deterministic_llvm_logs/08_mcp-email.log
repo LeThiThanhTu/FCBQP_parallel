@@ -3,10 +3,12 @@ Sense: max
 Scale: full
 Runs: 1
 Workers: 4
+Epoch lanes: 4
 Starts: 4
 Parallel backend: C++20 PSTL/libdispatch
 Best-known objective = 132.000000000
-Run 1/1: best objective = 132.000000000, reached best-known = YES, TTS to best-known (s) = 0.007088, target epoch = 1, start to run-best = 1, time to run-best (s) = 0.007088, runtime (s) = 0.023931
+Run 1/1: best objective = 132.000000000, reached best-known = YES, TTS to best-known (s) = 0.001802, target epoch = 1, start to run-best = 1, time to run-best (s) = 0.001803, runtime (s) = 0.001816
+Logical work: deterministic frontier = 1608
 
 Summary over 1 runs
 Instance name = email_n1133_m12
@@ -15,6 +17,6 @@ Best found obj = 132.000000000
 Solution fingerprint = 40b007a9d964504f
 Runtime limit: 0 seconds
 Average obj = 132.000000000
-Average TTS = 0.007088
+Average TTS = 0.001802
 Times reaching best-known = 1
 Selected vars of best run: 299 389 434 552 571 726 756 788 885 886 887 888

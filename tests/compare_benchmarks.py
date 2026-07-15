@@ -28,6 +28,7 @@ INVARIANT_FIELDS = (
     "reached_best_known",
     "target_epoch",
     "start_to_best",
+    "logical_work",
     "solution_fingerprint",
     "selected_vars",
 )
