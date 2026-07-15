@@ -178,6 +178,9 @@ PGO measurements are documented in `benchmark_results/OPTIMIZATION_REPORT.md`.
 The deterministic logical-counter scheduler and current comparison against the
 `stl` branch are documented in
 `benchmark_results/COUNTER_SCHEDULER_REPORT.md`.
+The ten-core, time-limit-free GBP benchmark is documented in
+`benchmark_results/GBP_FIXED_WORK_REPORT.md` and can be reproduced with
+`make benchmark-gbp-fixed`.
 
 Benchmark settings can be overridden without editing files:
 

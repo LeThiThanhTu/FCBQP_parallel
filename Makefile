@@ -35,11 +35,17 @@ SOLVER_TIME_LIMIT ?= 90
 BENCHMARK_TIMEOUT ?= 105
 DETERMINISM_STARTS ?= 4
 DETERMINISM_TIMEOUT ?= 180
+GBP_BENCHMARK_PHASE ?= gbp10_fixed230_codex_gcc
+GBP_BENCHMARK_THREADS ?= 10
+GBP_BENCHMARK_REPETITIONS ?= 3
+GBP_BENCHMARK_STARTS ?= 230
+GBP_BENCHMARK_TIMEOUT ?= 300
 
 .PHONY: all configure build build-llvm build-gcc build-fast build-llvm-fast build-gcc-fast \
 	pgo-gcc pgo-llvm test test-compilers benchmark benchmark-fast \
 	benchmark-pgo benchmark-pgo-llvm benchmark-pgo-gcc \
-	benchmark-llvm benchmark-gcc benchmark-compilers check-determinism clean help
+	benchmark-llvm benchmark-gcc benchmark-compilers benchmark-gbp-fixed \
+	check-determinism clean help
 
 all: build
 
@@ -152,6 +158,17 @@ benchmark-gcc:
 
 benchmark-compilers: benchmark-llvm benchmark-gcc
 
+benchmark-gbp-fixed: build-gcc-fast
+	python3 benchmark_gbp.py "$(GBP_BENCHMARK_PHASE)" \
+		--executable "$(GCC_FAST_BUILD_DIR)/main" \
+		--threads "$(GBP_BENCHMARK_THREADS)" \
+		--repetitions "$(GBP_BENCHMARK_REPETITIONS)" \
+		--starts "$(GBP_BENCHMARK_STARTS)" \
+		--solver-time-limit 0 \
+		--timeout "$(GBP_BENCHMARK_TIMEOUT)"
+	python3 tests/check_repeated_benchmark.py \
+		"benchmark_results/$(GBP_BENCHMARK_PHASE).csv"
+
 check-determinism:
 	$(MAKE) benchmark CXX="$(LLVM_CXX)" BUILD_DIR="$(LLVM_BUILD_DIR)" \
 		BENCHMARK_PHASE=deterministic_llvm BENCHMARK_STARTS="$(DETERMINISM_STARTS)" \
@@ -179,6 +196,7 @@ help:
 	@echo "  make benchmark    Build and run the ten-instance benchmark"
 	@echo "  make benchmark-compilers  Benchmark LLVM and GCC sequentially"
 	@echo "  make benchmark-fast  Benchmark the LLVM LTO/native build"
+	@echo "  make benchmark-gbp-fixed  Run the deterministic 10-core GBP benchmark"
 	@echo "  make benchmark-pgo   Train and benchmark both PGO builds"
 	@echo "  make check-determinism  Compare fixed-work LLVM and GCC results"
 	@echo "  make clean        Remove BUILD_DIR"
@@ -190,3 +208,5 @@ help:
 	@echo "  BENCHMARK_PHASE, BENCHMARK_THREADS, BENCHMARK_LANES_PER_WORKER, BENCHMARK_STARTS"
 	@echo "  SOLVER_TIME_LIMIT, BENCHMARK_TIMEOUT"
 	@echo "  DETERMINISM_STARTS, DETERMINISM_TIMEOUT"
+	@echo "  GBP_BENCHMARK_PHASE, GBP_BENCHMARK_THREADS, GBP_BENCHMARK_REPETITIONS"
+	@echo "  GBP_BENCHMARK_STARTS, GBP_BENCHMARK_TIMEOUT"
