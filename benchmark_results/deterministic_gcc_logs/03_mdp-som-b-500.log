@@ -4,10 +4,12 @@ Scale: half
 Runs: 1
 Workers: 4
 Epoch lanes: 4
+Elite group size: 4
 Starts: 4
+Construction attempts: 200
 Parallel backend: C++20 PSTL/TBB
 Best-known objective = 7141.000000000
-Run 1/1: best objective = 7141.000000000, reached best-known = YES, TTS to best-known (s) = 0.002802, target epoch = 1, start to run-best = 1, time to run-best (s) = 0.002815, runtime (s) = 0.003202
+Run 1/1: best objective = 7141.000000000, reached best-known = YES, TTS to best-known (s) = 0.002730, target epoch = 1, start to run-best = 1, time to run-best (s) = 0.002736, runtime (s) = 0.037185
 Logical work: deterministic frontier = 820
 
 Summary over 1 runs
@@ -17,6 +19,6 @@ Best found obj = 7141.000000000
 Solution fingerprint = 11504a154bf33c67
 Runtime limit: 0 seconds
 Average obj = 7141.000000000
-Average TTS = 0.002802
+Average TTS = 0.002730
 Times reaching best-known = 1
 Selected vars of best run: 1 4 38 52 54 60 82 83 84 92 98 100 102 111 132 135 137 146 197 199 212 224 225 228 229 236 254 264 269 319 320 325 327 329 332 335 351 360 371 385 399 407 420 435 446 462 472 480 493 499

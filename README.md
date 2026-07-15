@@ -140,10 +140,16 @@ deterministic total search-start budget and defaults to 200000.
 Each deterministic epoch uses one logical lane per worker by default. Physical
 workers dynamically claim lanes, while results are merged in lane-ID order.
 The solver exchanges a deterministic logical-work cutoff when a lane reaches
-the target, so other lanes stop at the same algorithmic frontier rather than
-at a speed-dependent wall-clock point. Set `FCBQP_EPOCH_LANES_PER_WORKER` to a
-positive integer to overdecompose the search; because it changes the seeded
-search streams, it is part of the deterministic configuration.
+the target. All lanes finish their current start at the epoch barrier, and
+results beyond that cutoff are discarded deterministically. This avoids a
+speed-dependent mid-kernel cancellation point. Set
+`FCBQP_EPOCH_LANES_PER_WORKER` to a positive integer to overdecompose the
+search; because it changes the seeded search streams, it is part of the
+deterministic configuration.
+`FCBQP_ELITE_GROUP_SIZE` can partition those lanes into fixed independent
+elite-sharing groups. Group membership and all exchanges remain deterministic.
+`FCBQP_CONSTRUCTION_MAX_ATTEMPTS` sets the deterministic retry budget for a
+diverse greedy construction; the quality-preserving default is 200.
 
 ## Determinism
 

@@ -142,6 +142,32 @@ def main() -> int:
             delayed.stdout,
         )
 
+    grouped_baseline = run(
+        executable,
+        nontrivial,
+        "0", "2", "4",
+        time_limit="0",
+        best_known="6",
+        extra_env={"FCBQP_ELITE_GROUP_SIZE": "1"},
+    )
+    for delayed_lane in ("0", "1"):
+        delayed = run(
+            executable,
+            nontrivial,
+            "0", "2", "4",
+            time_limit="0",
+            best_known="6",
+            extra_env={
+                "FCBQP_ELITE_GROUP_SIZE": "1",
+                "FCBQP_TEST_DELAY_LANE": delayed_lane,
+                "FCBQP_TEST_DELAY_US": "20000",
+            },
+        )
+        assert deterministic_fields(delayed) == deterministic_fields(grouped_baseline), (
+            grouped_baseline.stdout,
+            delayed.stdout,
+        )
+
     sparse_lines = ["1000 2", "0 1 -10"]
     sparse_lines.extend(f"{i} {i} {i}" for i in range(1000))
     sparse = run(

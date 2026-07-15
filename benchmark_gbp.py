@@ -31,6 +31,19 @@ def main() -> int:
     )
     parser.add_argument("--epoch-lanes-per-worker", type=int, default=1)
     parser.add_argument(
+        "--elite-group-size",
+        type=int,
+        default=0,
+        help="lanes sharing an elite pool; zero puts all lanes in one group",
+    )
+    parser.add_argument("--construction-attempts", type=int, default=200)
+    parser.add_argument(
+        "--instance",
+        action="append",
+        default=[],
+        help="run only this GBP filename stem; may be repeated",
+    )
+    parser.add_argument(
         "--solver-time-limit",
         type=float,
         default=0.0,
@@ -50,8 +63,15 @@ def main() -> int:
     args = parser.parse_args()
     if args.threads <= 0 or args.repetitions <= 0 or args.starts <= 0:
         parser.error("threads, repetitions, and starts must be positive")
-    if args.epoch_lanes_per_worker <= 0:
-        parser.error("epoch-lanes-per-worker must be positive")
+    if (
+        args.epoch_lanes_per_worker <= 0
+        or args.elite_group_size < 0
+        or args.construction_attempts <= 0
+    ):
+        parser.error(
+            "epoch-lanes-per-worker and construction-attempts must be positive; "
+            "elite-group-size must be nonnegative"
+        )
     if args.solver_time_limit < 0 or args.timeout <= 0:
         parser.error("solver-time-limit must be nonnegative and timeout positive")
 
@@ -61,6 +81,13 @@ def main() -> int:
         parser.error(f"executable not found: {executable}")
     best_known = root / "best_known_results.csv"
     instances = sorted((root / "dataset" / "GBP").glob("*.qsc"))
+    if args.instance:
+        requested_instances = set(args.instance)
+        instances = [instance for instance in instances if instance.stem in requested_instances]
+        found_instances = {instance.stem for instance in instances}
+        missing_instances = sorted(requested_instances - found_instances)
+        if missing_instances:
+            parser.error(f"unknown GBP instance(s): {', '.join(missing_instances)}")
     if not instances:
         parser.error("no dataset/GBP/*.qsc instances found")
 
@@ -75,6 +102,13 @@ def main() -> int:
     environment["FCBQP_EPOCH_LANES_PER_WORKER"] = str(
         args.epoch_lanes_per_worker
     )
+    environment["FCBQP_CONSTRUCTION_MAX_ATTEMPTS"] = str(
+        args.construction_attempts
+    )
+    if args.elite_group_size > 0:
+        environment["FCBQP_ELITE_GROUP_SIZE"] = str(args.elite_group_size)
+    else:
+        environment.pop("FCBQP_ELITE_GROUP_SIZE", None)
 
     rows: list[dict[str, str]] = []
     total = len(instances) * args.repetitions
@@ -138,6 +172,10 @@ def main() -> int:
                 "base_seed": "1",
                 "workers": str(args.threads),
                 "epoch_lanes_per_worker": str(args.epoch_lanes_per_worker),
+                "elite_group_size": (
+                    str(args.elite_group_size) if args.elite_group_size else "all"
+                ),
+                "construction_attempts": str(args.construction_attempts),
                 "starts": str(args.starts),
                 "solver_time_limit": str(args.solver_time_limit),
                 "status": status,
@@ -157,6 +195,7 @@ def main() -> int:
                 "logical_work": capture(
                     r"Logical work: deterministic frontier = ([^\n]+)", stdout
                 ),
+                "phase_profile": capture(r"Profile: ([^\n]+)", stdout),
                 "solution_fingerprint": capture(
                     r"Solution fingerprint = ([^\n]+)", stdout
                 ),

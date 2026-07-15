@@ -69,6 +69,8 @@ struct Params {
    int v_1 = 40;
    int v_2 = 40;
    int epoch_lanes_per_worker = 1;
+   int elite_group_size = std::numeric_limits<int>::max();
+   int construction_max_attempts = 200;
    double d_frac = 0.2;
    double time_limit_seconds = 600.0;
 };
@@ -86,6 +88,7 @@ struct Result {
 struct EliteSol {
    std::vector<int> x;
    std::vector<int> ones;
+   std::vector<uint64_t> bits;
    double obj = std::numeric_limits<double>::infinity();
    int min_hamming = std::numeric_limits<int>::max();
 };
@@ -179,17 +182,92 @@ private:
    LogicalWorkContext* previous_;
 };
 
+struct PhaseProfile {
+   double parallel_seconds = 0.0;
+   double greedy_seconds = 0.0;
+   double diversity_seconds = 0.0;
+   double tabu_seconds = 0.0;
+   double tabu_prefix_seconds = 0.0;
+   double sparse_move_seconds = 0.0;
+   double path_seconds = 0.0;
+   double elite_merge_seconds = 0.0;
+   uint64_t greedy_calls = 0;
+   uint64_t greedy_attempts = 0;
+   uint64_t greedy_additions = 0;
+   uint64_t tabu_iterations = 0;
+   uint64_t path_steps = 0;
+
+   PhaseProfile& operator+=(const PhaseProfile& other) {
+      parallel_seconds += other.parallel_seconds;
+      greedy_seconds += other.greedy_seconds;
+      diversity_seconds += other.diversity_seconds;
+      tabu_seconds += other.tabu_seconds;
+      tabu_prefix_seconds += other.tabu_prefix_seconds;
+      sparse_move_seconds += other.sparse_move_seconds;
+      path_seconds += other.path_seconds;
+      elite_merge_seconds += other.elite_merge_seconds;
+      greedy_calls += other.greedy_calls;
+      greedy_attempts += other.greedy_attempts;
+      greedy_additions += other.greedy_additions;
+      tabu_iterations += other.tabu_iterations;
+      path_steps += other.path_steps;
+      return *this;
+   }
+};
+
+#if defined(FCBQP_ENABLE_PHASE_PROFILING)
+static thread_local PhaseProfile* active_phase_profile = nullptr;
+
+class PhaseProfileScope {
+public:
+   explicit PhaseProfileScope(PhaseProfile& profile)
+      : previous_(active_phase_profile) {
+      active_phase_profile = &profile;
+   }
+
+   ~PhaseProfileScope() { active_phase_profile = previous_; }
+
+   PhaseProfileScope(const PhaseProfileScope&) = delete;
+   PhaseProfileScope& operator=(const PhaseProfileScope&) = delete;
+
+private:
+   PhaseProfile* previous_;
+};
+
+class PhaseTimer {
+public:
+   explicit PhaseTimer(double PhaseProfile::* member)
+      : profile_(active_phase_profile), member_(member) {
+      if (profile_ != nullptr) start_ = std::chrono::steady_clock::now();
+   }
+
+   ~PhaseTimer() {
+      if (profile_ == nullptr) return;
+      const auto stop = std::chrono::steady_clock::now();
+      profile_->*member_ += std::chrono::duration<double>(stop - start_).count();
+   }
+
+   PhaseTimer(const PhaseTimer&) = delete;
+   PhaseTimer& operator=(const PhaseTimer&) = delete;
+
+private:
+   PhaseProfile* profile_;
+   double PhaseProfile::* member_;
+   std::chrono::steady_clock::time_point start_{};
+};
+
+#define FCBQP_PROFILE_TIMER(name, member) \
+   PhaseTimer name(&PhaseProfile::member)
+#define FCBQP_PROFILE_INCREMENT(member) \
+   do { if (active_phase_profile != nullptr) ++active_phase_profile->member; } while (false)
+#else
+#define FCBQP_PROFILE_TIMER(name, member)
+#define FCBQP_PROFILE_INCREMENT(member) do { } while (false)
+#endif
+
 void account_logical_work(uint64_t amount = 1) {
    if (active_logical_work == nullptr || amount == 0) return;
    *active_logical_work->epoch_work += amount;
-}
-
-bool deterministic_target_stop_requested() {
-   if (active_logical_work == nullptr) return false;
-   const uint64_t cutoff = active_logical_work->target->logical_cutoff.load(
-      std::memory_order_acquire
-   );
-   return *active_logical_work->epoch_work >= cutoff;
 }
 
 void publish_deterministic_target() {
@@ -203,7 +281,6 @@ struct SearchControl {
    std::atomic<bool>& stop_requested;
 
    bool should_stop() const {
-      if (deterministic_target_stop_requested()) return true;
       if (stop_requested.load(std::memory_order_relaxed)) return true;
       if (!time_limit_reached(t_start, time_limit_seconds)) return false;
       stop_requested.store(true, std::memory_order_relaxed);
@@ -904,9 +981,13 @@ double objective_x(const std::vector<int>& x, const Instance& ins) {
    return obj;
 }
 
-std::vector<double> compute_h_x(const std::vector<int>& x, const Instance& ins) {
+void compute_h_x_into(
+   const std::vector<int>& x,
+   const Instance& ins,
+   std::vector<double>& h
+) {
    const int n = static_cast<int>(x.size());
-   std::vector<double> h(n, 0.0);
+   h.assign(static_cast<size_t>(n), 0.0);
 
    for (int col = 0; col < n; ++col) {
       if (!x[col]) continue;
@@ -927,6 +1008,11 @@ std::vector<double> compute_h_x(const std::vector<int>& x, const Instance& ins) 
          );
       }
    }
+}
+
+std::vector<double> compute_h_x(const std::vector<int>& x, const Instance& ins) {
+   std::vector<double> h;
+   compute_h_x_into(x, ins, h);
    return h;
 }
 
@@ -958,27 +1044,6 @@ static inline void add_symmetric_column_to_h(
 
 const std::vector<double>& diagonal_values(const Instance& ins) {
    return ins.diagonal;
-}
-
-void build_candidate_interactions(
-   const Instance& ins,
-   const std::vector<int>& rows,
-   const std::vector<int>& cols,
-   std::vector<double>& interactions,
-   std::vector<int>& col_position
-) {
-   if (!ins.sparse) return;
-   interactions.assign(rows.size() * cols.size(), 0.0);
-
-   for (size_t b = 0; b < cols.size(); ++b) col_position[cols[b]] = static_cast<int>(b);
-   for (size_t a = 0; a < rows.size(); ++a) {
-      const int row = rows[a];
-      for (int p = ins.row_ptr[row]; p < ins.row_ptr[row + 1]; ++p) {
-         const int b = col_position[ins.col_ind[p]];
-         if (b >= 0) interactions[a * cols.size() + static_cast<size_t>(b)] = ins.val[p];
-      }
-   }
-   for (int col : cols) col_position[col] = -1;
 }
 
 std::vector<double> interaction_impact(const Instance& ins, int requested_workers) {
@@ -1069,8 +1134,34 @@ EliteSol make_elite_solution(const std::vector<int>& x, double obj) {
    EliteSol elite;
    elite.x = x;
    elite.ones = selected_indices(x);
+   elite.bits.assign((x.size() + 63U) / 64U, 0);
+   for (int i : elite.ones) {
+      elite.bits[static_cast<size_t>(i) / 64U] |= uint64_t{ 1 } << (i % 64);
+   }
    elite.obj = obj;
    return elite;
+}
+
+std::vector<uint64_t> packed_solution(const std::vector<int>& x) {
+   std::vector<uint64_t> bits((x.size() + 63U) / 64U, 0);
+   for (size_t i = 0; i < x.size(); ++i) {
+      if (x[i]) bits[i / 64U] |= uint64_t{ 1 } << (i % 64U);
+   }
+   return bits;
+}
+
+int hamming_distance_packed(
+   const std::vector<uint64_t>& lhs,
+   const std::vector<uint64_t>& rhs
+) {
+   if (lhs.size() != rhs.size()) {
+      throw std::logic_error("Packed solutions have different sizes.");
+   }
+   int distance = 0;
+   for (size_t word = 0; word < lhs.size(); ++word) {
+      distance += std::popcount(lhs[word] ^ rhs[word]);
+   }
+   return distance;
 }
 
 int hamming_distance_to_elite(const std::vector<int>& x, const EliteSol& elite, const Instance& ins) {
@@ -1080,7 +1171,8 @@ int hamming_distance_to_elite(const std::vector<int>& x, const EliteSol& elite, 
 }
 
 int hamming_distance_elites(const EliteSol& a, const EliteSol& b, const Instance& ins) {
-   return hamming_distance_to_elite(a.x, b, ins);
+   (void)ins;
+   return hamming_distance_packed(a.bits, b.bits);
 }
 
 void refresh_elite_min_distances(std::vector<EliteSol>& elite_pool, const Instance& ins) {
@@ -1437,10 +1529,25 @@ struct TabuScratch {
    std::vector<int> cand_in;
    std::vector<int> best_x;
    std::vector<int> candidate_position;
-   std::vector<int> edge_generation;
+   std::vector<uint32_t> candidate_position_generation;
+   std::vector<uint32_t> edge_generation;
    std::vector<double> sparse_in_term;
    std::vector<IncomingCandidate> incoming_order;
+   uint32_t candidate_marker_generation = 0;
+   uint32_t edge_marker_generation = 0;
 };
+
+uint32_t next_marker_generation(
+   std::vector<uint32_t>& markers,
+   uint32_t& generation
+) {
+   ++generation;
+   if (generation == 0) {
+      std::fill(markers.begin(), markers.end(), 0U);
+      generation = 1;
+   }
+   return generation;
+}
 
 struct MoveChoice {
    int i = -1;
@@ -1512,9 +1619,18 @@ MoveChoice find_sparse_tabu_move(
 ) {
    const int cols = static_cast<int>(cand_in.size());
    if (scratch.candidate_position.size() != static_cast<size_t>(ins.n)) {
-      scratch.candidate_position.assign(static_cast<size_t>(ins.n), -1);
+      scratch.candidate_position.resize(static_cast<size_t>(ins.n));
+      scratch.candidate_position_generation.assign(static_cast<size_t>(ins.n), 0U);
    }
-   for (int b = 0; b < cols; ++b) scratch.candidate_position[cand_in[b]] = b;
+   const uint32_t candidate_generation = next_marker_generation(
+      scratch.candidate_position_generation,
+      scratch.candidate_marker_generation
+   );
+   for (int b = 0; b < cols; ++b) {
+      const int candidate = cand_in[b];
+      scratch.candidate_position[candidate] = b;
+      scratch.candidate_position_generation[candidate] = candidate_generation;
+   }
 
    scratch.incoming_order.resize(static_cast<size_t>(cols));
    scratch.sparse_in_term.resize(static_cast<size_t>(cols));
@@ -1532,19 +1648,24 @@ MoveChoice find_sparse_tabu_move(
          return lhs.position < rhs.position;
       }
    );
-   scratch.edge_generation.assign(static_cast<size_t>(cols), 0);
+   if (scratch.edge_generation.size() < static_cast<size_t>(cols)) {
+      scratch.edge_generation.resize(static_cast<size_t>(cols), 0U);
+   }
 
    MoveChoice allowed;
    MoveChoice fallback;
    for (int a = 0; a < static_cast<int>(cand_out.size()); ++a) {
       const int i = cand_out[a];
-      const int generation = a + 1;
+      const uint32_t generation = next_marker_generation(
+         scratch.edge_generation,
+         scratch.edge_marker_generation
+      );
       const double outgoing_term = -2.0 * h[i] + ins.diagonal[i];
 
       for (int p = ins.row_ptr[i]; p < ins.row_ptr[i + 1]; ++p) {
          const int j = ins.col_ind[p];
+         if (scratch.candidate_position_generation[j] != candidate_generation) continue;
          const int b = scratch.candidate_position[j];
-         if (b < 0) continue;
          scratch.edge_generation[b] = generation;
          const double delta = outgoing_term + scratch.sparse_in_term[b] - 2.0 * ins.val[p];
          consider_move(fallback, i, j, a, b, delta);
@@ -1583,7 +1704,6 @@ MoveChoice find_sparse_tabu_move(
       }
    }
 
-   for (int j : cand_in) scratch.candidate_position[j] = -1;
    return allowed.valid() ? allowed : fallback;
 }
 
@@ -1600,6 +1720,7 @@ void tabu_search(
    const BestKnownObjective& best_known,
    Result& res
 ) {
+   FCBQP_PROFILE_TIMER(tabu_timer, tabu_seconds);
    const int n = static_cast<int>(x.size());
    const int k = std::accumulate(x.begin(), x.end(), 0);
 
@@ -1687,27 +1808,34 @@ void tabu_search(
    for (int iter = 0; iter < par.T_max; ++iter) {
       if (control.should_stop()) break;
       account_logical_work();
+      FCBQP_PROFILE_INCREMENT(tabu_iterations);
       if (ones.empty() || zeros.empty()) {
          break;
       }
 
-      cand_out = ones;
-      cand_in = zeros;
+      {
+         FCBQP_PROFILE_TIMER(prefix_timer, tabu_prefix_seconds);
+         cand_out = ones;
+         cand_in = zeros;
 
-      const int num_cand_out = std::min(par.v_1, static_cast<int>(cand_out.size()));
+         const int num_cand_out = std::min(par.v_1, static_cast<int>(cand_out.size()));
+         const int num_cand_in = std::min(par.v_2, static_cast<int>(cand_in.size()));
 
-      const int num_cand_in = std::min(par.v_2, static_cast<int>(cand_in.size()));
+         select_candidate_prefix(cand_out, num_cand_out, [&](int a, int b) {
+            return h[a] > h[b];
+            });
+         select_candidate_prefix(cand_in, num_cand_in, [&](int a, int b) {
+            return h[a] < h[b];
+            });
+      }
 
-      select_candidate_prefix(cand_out, num_cand_out, [&](int a, int b) {
-         return h[a] > h[b];
-         });
-      select_candidate_prefix(cand_in, num_cand_in, [&](int a, int b) {
-         return h[a] < h[b];
-         });
-
-      const MoveChoice move = ins.sparse
-         ? find_sparse_tabu_move(ins, cand_out, cand_in, h, tabu_until, iter, obj, best_obj, scratch)
-         : find_dense_tabu_move(ins, cand_out, cand_in, h, tabu_until, iter, obj, best_obj);
+      MoveChoice move;
+      {
+         FCBQP_PROFILE_TIMER(move_timer, sparse_move_seconds);
+         move = ins.sparse
+            ? find_sparse_tabu_move(ins, cand_out, cand_in, h, tabu_until, iter, obj, best_obj, scratch)
+            : find_dense_tabu_move(ins, cand_out, cand_in, h, tabu_until, iter, obj, best_obj);
+      }
       const int best_i = move.i;
       const int best_j = move.j;
       const double best_delta = move.delta;
@@ -1766,6 +1894,7 @@ std::vector<int> path_relink_one_direction(
    const SearchControl& control,
    DeterministicRng& rng
 ) {
+   FCBQP_PROFILE_TIMER(path_timer, path_seconds);
    const int n = ins.n;
 
    if (static_cast<int>(start.size()) != n ||
@@ -1786,8 +1915,12 @@ std::vector<int> path_relink_one_direction(
    double obj = objective_x(x, ins);
    std::vector<double> h = compute_h_x(x, ins);
    const std::vector<double>& diagonal = diagonal_values(ins);
-   std::vector<double> candidate_interactions;
-   std::vector<int> candidate_position(static_cast<size_t>(n), -1);
+   std::vector<int> candidate_position(static_cast<size_t>(n));
+   std::vector<uint32_t> candidate_position_generation(static_cast<size_t>(n), 0U);
+   std::vector<uint32_t> edge_generation;
+   std::vector<IncomingCandidate> incoming_order;
+   uint32_t candidate_marker_generation = 0;
+   uint32_t edge_marker_generation = 0;
    bool found_intermediate = false;
    std::vector<int> best_x = start;
    double best_obj = std::numeric_limits<double>::infinity();
@@ -1815,52 +1948,109 @@ std::vector<int> path_relink_one_direction(
       int j;
       double delta;
    };
+   const auto move_less = [](const Move& a, const Move& b) {
+      if (a.delta != b.delta) return a.delta < b.delta;
+      if (a.i != b.i) return a.i < b.i;
+      return a.j < b.j;
+      };
+   std::vector<int> cand_remove;
+   std::vector<int> cand_add;
+   cand_remove.reserve(remove_set.size());
+   cand_add.reserve(add_set.size());
+   std::vector<Move> moves;
+   moves.reserve(10);
 
    while (!remove_set.empty() && !add_set.empty()) {
       if (control.should_stop()) break;
       account_logical_work();
+      FCBQP_PROFILE_INCREMENT(path_steps);
       const int A = std::min(par.v_1, static_cast<int>(remove_set.size()));
       const int B = std::min(par.v_2, static_cast<int>(add_set.size()));
 
-      std::vector<int> cand_remove = remove_set;
+      cand_remove = remove_set;
       select_candidate_prefix(cand_remove, A, [&](int a, int b) {
          if (h[a] != h[b]) return h[a] > h[b];
          return a < b;
          });
 
-      std::vector<int> cand_add = add_set;
+      cand_add = add_set;
       select_candidate_prefix(cand_add, B, [&](int a, int b) {
          if (h[a] != h[b]) return h[a] < h[b];
          return a < b;
          });
 
-      build_candidate_interactions(
-         ins, cand_remove, cand_add, candidate_interactions, candidate_position
-      );
-
-      const auto move_less = [](const Move& a, const Move& b) {
-         if (a.delta != b.delta) return a.delta < b.delta;
-         if (a.i != b.i) return a.i < b.i;
-         return a.j < b.j;
+      moves.clear();
+      const auto consider_path_move = [&](int i, int j, double delta) {
+         const Move candidate{ i, j, delta };
+         if (moves.size() < 10) {
+            moves.push_back(candidate);
+         }
+         else {
+            auto worst = std::max_element(moves.begin(), moves.end(), move_less);
+            if (move_less(candidate, *worst)) *worst = candidate;
+         }
          };
-      std::vector<Move> moves;
-      moves.reserve(10);
 
-      for (size_t a = 0; a < cand_remove.size(); ++a) {
-         const int i = cand_remove[a];
-         for (size_t b = 0; b < cand_add.size(); ++b) {
-            const int j = cand_add[b];
-            const double qij = ins.sparse
-               ? candidate_interactions[a * cand_add.size() + b]
-               : Qat(ins, i, j);
-            const double delta = 2.0 * (h[j] - h[i]) + diagonal[i] + diagonal[j] - 2.0 * qij;
-            const Move candidate{ i, j, delta };
-            if (moves.size() < 10) {
-               moves.push_back(candidate);
+      if (ins.sparse) {
+         const uint32_t candidate_generation = next_marker_generation(
+            candidate_position_generation, candidate_marker_generation
+         );
+         for (int b = 0; b < static_cast<int>(cand_add.size()); ++b) {
+            const int j = cand_add[static_cast<size_t>(b)];
+            candidate_position[j] = b;
+            candidate_position_generation[j] = candidate_generation;
+         }
+
+         incoming_order.resize(cand_add.size());
+         for (int b = 0; b < static_cast<int>(cand_add.size()); ++b) {
+            const int j = cand_add[static_cast<size_t>(b)];
+            incoming_order[static_cast<size_t>(b)] = {
+               2.0 * h[j] + diagonal[j], b, j
+            };
+         }
+         std::sort(
+            incoming_order.begin(), incoming_order.end(),
+            [](const IncomingCandidate& lhs, const IncomingCandidate& rhs) {
+               if (lhs.key != rhs.key) return lhs.key < rhs.key;
+               return lhs.variable < rhs.variable;
             }
-            else {
-               auto worst = std::max_element(moves.begin(), moves.end(), move_less);
-               if (move_less(candidate, *worst)) *worst = candidate;
+         );
+         if (edge_generation.size() < cand_add.size()) {
+            edge_generation.resize(cand_add.size(), 0U);
+         }
+
+         for (int i : cand_remove) {
+            const uint32_t edge_marker = next_marker_generation(
+               edge_generation, edge_marker_generation
+            );
+            const double outgoing_term = -2.0 * h[i] + diagonal[i];
+            for (int p = ins.row_ptr[i]; p < ins.row_ptr[i + 1]; ++p) {
+               const int j = ins.col_ind[p];
+               if (candidate_position_generation[j] != candidate_generation) continue;
+               const int b = candidate_position[j];
+               edge_generation[static_cast<size_t>(b)] = edge_marker;
+               consider_path_move(
+                  i, j,
+                  outgoing_term + 2.0 * h[j] + diagonal[j] - 2.0 * ins.val[p]
+               );
+            }
+
+            int non_edges_considered = 0;
+            for (const IncomingCandidate& incoming : incoming_order) {
+               if (edge_generation[static_cast<size_t>(incoming.position)] == edge_marker) {
+                  continue;
+               }
+               consider_path_move(i, incoming.variable, outgoing_term + incoming.key);
+               if (++non_edges_considered == 10) break;
+            }
+         }
+      }
+      else {
+         for (int i : cand_remove) {
+            for (int j : cand_add) {
+               const double delta =
+                  2.0 * (h[j] - h[i]) + diagonal[i] + diagonal[j] - 2.0 * Qat(ins, i, j);
+               consider_path_move(i, j, delta);
             }
          }
       }
@@ -2036,6 +2226,8 @@ SearchPoint random_greedy_construction(
    const SearchControl& control,
    DeterministicRng& rng
 ) {
+   FCBQP_PROFILE_TIMER(greedy_timer, greedy_seconds);
+   FCBQP_PROFILE_INCREMENT(greedy_calls);
    const int n = ins.n;
    const int k = ins.k;
    const std::vector<double>& diagonal = diagonal_values(ins);
@@ -2051,7 +2243,7 @@ SearchPoint random_greedy_construction(
 
    const int d = static_cast<int>(std::ceil(par.d_frac * ins.k));
 
-   const int max_attempts = elite_pool.empty() ? 1 : 200;
+   const int max_attempts = elite_pool.empty() ? 1 : par.construction_max_attempts;
 
    SearchPoint best_point;
    best_point.x.assign(static_cast<size_t>(n), 0);
@@ -2066,12 +2258,20 @@ SearchPoint random_greedy_construction(
       };
    std::vector<AddMove> moves;
    moves.reserve(static_cast<size_t>(n));
+   std::vector<int> x(static_cast<size_t>(n));
+   std::vector<int> cand_attempt;
+   cand_attempt.reserve(cand.size());
+   std::vector<int> available;
+   available.reserve(static_cast<size_t>(n));
+   std::vector<double> h;
+   h.reserve(static_cast<size_t>(n));
 
    for (int attempt = 0; attempt < max_attempts; ++attempt) {
       if (control.should_stop()) return {};
       account_logical_work();
-      std::vector<int> x(n, 0);
-      std::vector<int> cand_attempt = cand;
+      FCBQP_PROFILE_INCREMENT(greedy_attempts);
+      x.assign(static_cast<size_t>(n), 0);
+      cand_attempt = cand;
       deterministic_shuffle(cand_attempt.begin(), cand_attempt.end(), rng);
       int ones_now = 0;
 
@@ -2082,8 +2282,12 @@ SearchPoint random_greedy_construction(
             ++ones_now;
          }
       }
+      available.clear();
+      for (int i = 0; i < n; ++i) {
+         if (!x[i]) available.push_back(i);
+      }
 
-      std::vector<double> h = compute_h_x(x, ins);
+      compute_h_x_into(x, ins, h);
       double obj = objective_x(x, ins);
 
       while (ones_now < k) {
@@ -2099,11 +2303,10 @@ SearchPoint random_greedy_construction(
             return { std::move(x), std::move(h), obj };
          }
          account_logical_work();
+         FCBQP_PROFILE_INCREMENT(greedy_additions);
          moves.clear();
 
-         for (int i = 0; i < n; ++i) {
-            if (x[i]) continue;
-
+         for (int i : available) {
             double gain = diagonal[i] + 2.0 * h[i];
             moves.push_back({ i, gain });
          }
@@ -2125,6 +2328,13 @@ SearchPoint random_greedy_construction(
          obj += selected.gain;
          x[best_i] = 1;
          ++ones_now;
+         const auto available_it = std::lower_bound(
+            available.begin(), available.end(), best_i
+         );
+         if (available_it == available.end() || *available_it != best_i) {
+            throw std::logic_error("Selected construction variable is not available.");
+         }
+         available.erase(available_it);
 
          add_symmetric_column_to_h(h, ins, best_i, 1.0);
       }
@@ -2134,8 +2344,12 @@ SearchPoint random_greedy_construction(
       }
 
       int cur_min_dist = std::numeric_limits<int>::max();
-      for (const auto& e : elite_pool) {
-         cur_min_dist = std::min(cur_min_dist, hamming_distance_to_elite(x, e, ins));
+      {
+         FCBQP_PROFILE_TIMER(diversity_timer, diversity_seconds);
+         const std::vector<uint64_t> bits = packed_solution(x);
+         for (const auto& e : elite_pool) {
+            cur_min_dist = std::min(cur_min_dist, hamming_distance_packed(bits, e.bits));
+         }
       }
 
       if (cur_min_dist >= d) {
@@ -2232,16 +2446,19 @@ std::vector<int> elite_based_restart(
 
    std::vector<int> best_x(n, 0);
    int best_min_dist = -1;
+   std::vector<int> x(static_cast<size_t>(n));
+   std::vector<int> cand;
+   cand.reserve(free_vars.size());
 
    for (int attempt = 0; attempt < max_attempts; ++attempt) {
       if (control.should_stop()) return {};
       account_logical_work();
-      std::vector<int> x(n, 0);
+      x.assign(static_cast<size_t>(n), 0);
       for (int i : fixed_ones) {
          x[i] = 1;
       }
 
-      std::vector<int> cand = free_vars;
+      cand = free_vars;
       deterministic_shuffle(cand.begin(), cand.end(), rng);
 
       for (int t = 0; t < need; ++t) {
@@ -2249,8 +2466,9 @@ std::vector<int> elite_based_restart(
       }
 
       int cur_min_dist = std::numeric_limits<int>::max();
+      const std::vector<uint64_t> bits = packed_solution(x);
       for (const auto& e : elite_pool) {
-         cur_min_dist = std::min(cur_min_dist, hamming_distance_to_elite(x, e, ins));
+         cur_min_dist = std::min(cur_min_dist, hamming_distance_packed(bits, e.bits));
       }
 
       if (cur_min_dist >= d) {
@@ -2284,12 +2502,13 @@ std::vector<int> random_diverse_restart(
 
    std::vector<int> best_x(n, 0);
    int best_min_dist = -1;
+   std::vector<int> x(static_cast<size_t>(n));
 
    for (int attempt = 0; attempt < max_attempts; ++attempt) {
       if (control.should_stop()) return {};
       account_logical_work();
       deterministic_shuffle(idx.begin(), idx.end(), rng);
-      std::vector<int> x(n, 0);
+      x.assign(static_cast<size_t>(n), 0);
       for (int t = 0; t < k; ++t) {
          x[idx[t]] = 1;
       }
@@ -2299,8 +2518,9 @@ std::vector<int> random_diverse_restart(
       }
 
       int cur_min_dist = std::numeric_limits<int>::max();
+      const std::vector<uint64_t> bits = packed_solution(x);
       for (const auto& e : elite_pool) {
-         cur_min_dist = std::min(cur_min_dist, hamming_distance_to_elite(x, e, ins));
+         cur_min_dist = std::min(cur_min_dist, hamming_distance_packed(bits, e.bits));
       }
 
       if (cur_min_dist >= d) {
@@ -2330,6 +2550,9 @@ struct WorkerSearchState {
    std::vector<int> incumbent_for_guide;
    std::vector<int> candidate_x;
    TabuScratch tabu_scratch;
+#if defined(FCBQP_ENABLE_PHASE_PROFILING)
+   PhaseProfile phase_profile;
+#endif
    double candidate_obj = std::numeric_limits<double>::infinity();
    bool candidate_ready = false;
 };
@@ -2356,6 +2579,9 @@ void run_worker_start(
       &state.epoch_work
    };
    LogicalWorkScope logical_scope(logical_context);
+#if defined(FCBQP_ENABLE_PHASE_PROFILING)
+   PhaseProfileScope phase_profile_scope(state.phase_profile);
+#endif
    if (state.finished || state.result.reached_target || control.should_stop()) return;
 
    account_logical_work();
@@ -2547,10 +2773,23 @@ int main(int argc, char* argv[]) {
             configured, "FCBQP_EPOCH_LANES_PER_WORKER"
          );
       }
+      if (const char* configured = std::getenv("FCBQP_CONSTRUCTION_MAX_ATTEMPTS")) {
+         par.construction_max_attempts = parse_worker_count(
+            configured, "FCBQP_CONSTRUCTION_MAX_ATTEMPTS"
+         );
+      }
+      if (const char* configured = std::getenv("FCBQP_ELITE_GROUP_SIZE")) {
+         par.elite_group_size = parse_worker_count(
+            configured, "FCBQP_ELITE_GROUP_SIZE"
+         );
+      }
       const int configured_epoch_lanes = static_cast<int>(std::min<int64_t>(
          requested_starts,
          static_cast<int64_t>(requested_workers) * par.epoch_lanes_per_worker
       ));
+      const int configured_elite_group_size = std::min(
+         par.elite_group_size, configured_epoch_lanes
+      );
 
       const std::optional<Result> trivial_result = solve_trivial_cardinality(ins);
       std::vector<int> C1;
@@ -2574,7 +2813,9 @@ int main(int argc, char* argv[]) {
       std::cout << "Runs: " << num_runs << "\n";
       std::cout << "Workers: " << requested_workers << "\n";
       std::cout << "Epoch lanes: " << configured_epoch_lanes << "\n";
+      std::cout << "Elite group size: " << configured_elite_group_size << "\n";
       std::cout << "Starts: " << requested_starts << "\n";
+      std::cout << "Construction attempts: " << par.construction_max_attempts << "\n";
       std::cout << "Parallel backend: " << parallel_backend_name() << "\n";
 
       if (best_known.loaded) {
@@ -2590,6 +2831,9 @@ int main(int argc, char* argv[]) {
          Result global_res;
          global_res.best_obj = std::numeric_limits<double>::infinity();
          uint64_t deterministic_logical_work = 0;
+#if defined(FCBQP_ENABLE_PHASE_PROFILING)
+         PhaseProfile run_profile;
+#endif
          bool run_reached_target = false;
          double run_time_to_target = std::numeric_limits<double>::infinity();
          if (trivial_result.has_value()) {
@@ -2601,14 +2845,19 @@ int main(int argc, char* argv[]) {
             }
          }
          else {
-            EliteState global_elite;
-            global_elite.ones_count.assign(static_cast<size_t>(ins.n), 0);
-            global_elite.construction_candidates = C1;
             std::atomic<bool> stop_requested(false);
             SearchControl control{ t0, par.time_limit_seconds, stop_requested };
 
             const int worker_count = std::min(requested_workers, par.num_starts);
             const int lane_count = std::min(configured_epoch_lanes, par.num_starts);
+            const int elite_group_size = std::min(configured_elite_group_size, lane_count);
+            const int elite_group_count =
+               (lane_count + elite_group_size - 1) / elite_group_size;
+            std::vector<EliteState> elite_groups(static_cast<size_t>(elite_group_count));
+            for (EliteState& elite : elite_groups) {
+               elite.ones_count.assign(static_cast<size_t>(ins.n), 0);
+               elite.construction_candidates = C1;
+            }
             std::vector<int> lane_start_limits(static_cast<size_t>(lane_count));
             std::vector<WorkerSearchState> lane_states;
             lane_states.reserve(static_cast<size_t>(lane_count));
@@ -2643,6 +2892,9 @@ int main(int argc, char* argv[]) {
                }
                DeterministicTargetControl epoch_target;
                std::atomic<int> next_lane{ 0 };
+#if defined(FCBQP_ENABLE_PHASE_PROFILING)
+               const auto parallel_begin = std::chrono::steady_clock::now();
+#endif
                parallel_for_workers(worker_count, [&](int) noexcept {
                   while (true) {
                      const int lane_id = next_lane.fetch_add(1, std::memory_order_relaxed);
@@ -2658,7 +2910,7 @@ int main(int argc, char* argv[]) {
                            par,
                            state,
                            lane_id,
-                           global_elite,
+                           elite_groups[static_cast<size_t>(lane_id / elite_group_size)],
                            epoch_target,
                            control,
                            sense,
@@ -2672,6 +2924,11 @@ int main(int argc, char* argv[]) {
                      }
                   }
                   });
+#if defined(FCBQP_ENABLE_PHASE_PROFILING)
+               run_profile.parallel_seconds += std::chrono::duration<double>(
+                  std::chrono::steady_clock::now() - parallel_begin
+               ).count();
+#endif
 
                for (const std::exception_ptr& error : lane_errors) {
                   if (error) std::rethrow_exception(error);
@@ -2689,10 +2946,10 @@ int main(int argc, char* argv[]) {
                }
                if (target_cutoff != std::numeric_limits<uint64_t>::max()) {
                   for (WorkerSearchState& state : lane_states) {
-                     // A lane that crossed the logical target frontier before
-                     // observing it must not make the result depend on physical
-                     // scheduling speed. Its current-start result and elite
-                     // event are discarded; previously committed epochs remain.
+                     // Every lane finishes its current start before this
+                     // deterministic barrier. Work beyond the first target
+                     // frontier is excluded from the accepted result; the full
+                     // execution is nevertheless schedule independent.
                      if (state.epoch_work > target_cutoff) {
                         state.result = state.epoch_baseline_result;
                         state.candidate_ready = false;
@@ -2711,48 +2968,65 @@ int main(int argc, char* argv[]) {
                   break;
                }
 
-               // All overdecomposed lanes in an epoch read the same immutable
-               // elite state. Merge in lane-id order so scheduling speed cannot
-               // affect the next snapshot or the search trajectory.
-               bool elite_changed = false;
+               // Every lane reads its group's immutable epoch snapshot. Merge
+               // in lane-id order so scheduling speed cannot affect any next
+               // snapshot or search trajectory.
+#if defined(FCBQP_ENABLE_PHASE_PROFILING)
+               const auto elite_merge_begin = std::chrono::steady_clock::now();
+#endif
+               std::vector<unsigned char> elite_changed(
+                  static_cast<size_t>(elite_group_count), 0
+               );
                for (int lane_id = 0; lane_id < lane_count; ++lane_id) {
                   WorkerSearchState& state = lane_states[lane_id];
                   if (state.candidate_ready) {
-                     elite_changed = try_insert_elite(
+                     const int group = lane_id / elite_group_size;
+                     EliteState& elite = elite_groups[static_cast<size_t>(group)];
+                     elite_changed[static_cast<size_t>(group)] = try_insert_elite(
                         ins,
-                        global_elite.pool,
-                        global_elite.ones_count,
+                        elite.pool,
+                        elite.ones_count,
                         state.candidate_x,
                         state.candidate_obj,
                         par
-                     ) || elite_changed;
+                     ) || elite_changed[static_cast<size_t>(group)];
                      state.candidate_ready = false;
                      state.candidate_x.clear();
                   }
                }
-               if (elite_changed) {
-                  global_elite.construction_candidates = C1;
+               for (int group = 0; group < elite_group_count; ++group) {
+                  if (!elite_changed[static_cast<size_t>(group)]) continue;
+                  EliteState& elite = elite_groups[static_cast<size_t>(group)];
+                  elite.construction_candidates = C1;
                   for (int i = 0; i < ins.n; ++i) {
-                     if (global_elite.ones_count[i] > 0) {
-                        global_elite.construction_candidates.push_back(i);
+                     if (elite.ones_count[i] > 0) {
+                        elite.construction_candidates.push_back(i);
                      }
                   }
                   std::sort(
-                     global_elite.construction_candidates.begin(),
-                     global_elite.construction_candidates.end()
+                     elite.construction_candidates.begin(),
+                     elite.construction_candidates.end()
                   );
-                  global_elite.construction_candidates.erase(
+                  elite.construction_candidates.erase(
                      std::unique(
-                        global_elite.construction_candidates.begin(),
-                        global_elite.construction_candidates.end()
+                        elite.construction_candidates.begin(),
+                        elite.construction_candidates.end()
                      ),
-                     global_elite.construction_candidates.end()
+                     elite.construction_candidates.end()
                   );
                }
+#if defined(FCBQP_ENABLE_PHASE_PROFILING)
+               run_profile.elite_merge_seconds += std::chrono::duration<double>(
+                  std::chrono::steady_clock::now() - elite_merge_begin
+               ).count();
+#endif
 
             }
 
             for (WorkerSearchState& state : lane_states) {
+#if defined(FCBQP_ENABLE_PHASE_PROFILING)
+               run_profile += state.phase_profile;
+#endif
                Result& local_res = state.result;
                const bool local_reached_target = local_res.reached_target && std::isfinite(local_res.time_to_target);
                if (local_reached_target && (!run_reached_target || local_res.time_to_target < run_time_to_target)) {
@@ -2817,6 +3091,22 @@ int main(int argc, char* argv[]) {
             << "\n";
          std::cout << "Logical work: deterministic frontier = "
             << deterministic_logical_work << "\n";
+#if defined(FCBQP_ENABLE_PHASE_PROFILING)
+         std::cout << "Profile: parallel_s=" << run_profile.parallel_seconds
+            << ", greedy_cpu_s=" << run_profile.greedy_seconds
+            << ", greedy_calls=" << run_profile.greedy_calls
+            << ", greedy_attempts=" << run_profile.greedy_attempts
+            << ", greedy_additions=" << run_profile.greedy_additions
+            << ", diversity_cpu_s=" << run_profile.diversity_seconds
+            << ", tabu_cpu_s=" << run_profile.tabu_seconds
+            << ", tabu_iterations=" << run_profile.tabu_iterations
+            << ", tabu_prefix_cpu_s=" << run_profile.tabu_prefix_seconds
+            << ", sparse_move_cpu_s=" << run_profile.sparse_move_seconds
+            << ", path_cpu_s=" << run_profile.path_seconds
+            << ", path_steps=" << run_profile.path_steps
+            << ", elite_merge_s=" << run_profile.elite_merge_seconds
+            << "\n";
+#endif
       }
 
       double sum_obj = 0.0;

@@ -4,10 +4,12 @@ Scale: full
 Runs: 1
 Workers: 4
 Epoch lanes: 4
+Elite group size: 4
 Starts: 4
+Construction attempts: 200
 Parallel backend: C++20 PSTL/libdispatch
 Best-known objective = 184.000000000
-Run 1/1: best objective = 566.000000000, reached best-known = NO, TTS to best-known (s) = unknown, target epoch = unknown, start to run-best = 1, time to run-best (s) = 0.657325, runtime (s) = 0.688286
+Run 1/1: best objective = 566.000000000, reached best-known = NO, TTS to best-known (s) = unknown, target epoch = unknown, start to run-best = 1, time to run-best (s) = 0.665352, runtime (s) = 0.707707
 Logical work: deterministic frontier = 86768
 
 Summary over 1 runs

@@ -14,11 +14,16 @@ option(FCBQP_ENABLE_LTO "Enable interprocedural/link-time optimization" OFF)
 option(FCBQP_NATIVE_ARCH "Tune the executable for the build machine" OFF)
 option(FCBQP_PGO_GENERATE "Build an instrumented profile-generation executable" OFF)
 option(FCBQP_PGO_USE "Build using a previously collected profile" OFF)
+option(FCBQP_ENABLE_PHASE_PROFILING "Collect detailed search phase timings" OFF)
 set(FCBQP_PGO_DIR "${CMAKE_BINARY_DIR}/pgo-data" CACHE PATH
     "GCC profile directory or directory containing the Clang merged.profdata file")
 
 if(FCBQP_PGO_GENERATE AND FCBQP_PGO_USE)
     message(FATAL_ERROR "FCBQP_PGO_GENERATE and FCBQP_PGO_USE are mutually exclusive")
+endif()
+
+if(FCBQP_ENABLE_PHASE_PROFILING)
+    target_compile_definitions(main PRIVATE FCBQP_ENABLE_PHASE_PROFILING=1)
 endif()
 
 if(FCBQP_ENABLE_LTO)
