@@ -55,8 +55,8 @@ make
 The `Makefile` wraps the CMake build. To select a compiler or build directory:
 
 ```bash
-make CXX=/opt/homebrew/opt/llvm/bin/clang++ BUILD_DIR=build-llvm JOBS=8
-make CXX=/opt/homebrew/bin/g++-16 BUILD_DIR=build-gcc JOBS=8
+make CXX=/path/to/clang++ BUILD_DIR=build-llvm JOBS=8
+make CXX=/path/to/g++-16 BUILD_DIR=build-gcc JOBS=8
 ```
 
 The equivalent convenience targets are `make build-llvm`, `make build-gcc`,
