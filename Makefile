@@ -24,8 +24,8 @@ EXTRA_CMAKE_ARGS ?=
 
 PGO_DENSE_INSTANCE ?= dataset/MDP/MDG-a_n2000/MDG-a_21_n2000_m200.txt
 PGO_SPARSE_INSTANCE ?= dataset/GBP/crack.graph.qsc
-PGO_GBP_PATH_INSTANCE ?= dataset/GBP/bcsstk33.graph.qsc
-PGO_GBP_CONSTRUCTION_INSTANCE ?= dataset/GBP/fe_sphere.graph.qsc
+PGO_GBP_PATH_INSTANCE ?= dataset/GBP/bcsstk29.graph.qsc
+PGO_GBP_CONSTRUCTION_INSTANCE ?= dataset/GBP/cti.graph.qsc
 PGO_DENSE_STARTS ?= 12
 PGO_SPARSE_STARTS ?= 8
 PGO_GBP_PATH_STARTS ?= 20

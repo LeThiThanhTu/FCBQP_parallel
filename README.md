@@ -98,7 +98,6 @@ The default settings for the benchmark instances are:
 | `dataset/MCP` | `max full` |
 | `dataset/GBP` | `min full` |
 
-The best-known objective file is `best_known_results.csv`.
 
 ## Run
 
@@ -207,3 +206,7 @@ make benchmark-compilers
 
 Run the regression tests with `make test` and list all Make targets with
 `make help`.
+
+## Related link:
+
+- [Benchmark instances used in the computational study conducted in the paper](https://github.com/LeThiThanhTu/Benchmark_instances_FCBQP)
