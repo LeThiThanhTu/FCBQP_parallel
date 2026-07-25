@@ -116,7 +116,7 @@ or simply
 For example:
 
 ```bash
-./build/main max half dataset/MDP/LA/LA_n2000_m100.qsc best_known_results.csv
+./build/main max half dataset/MDP/GKD-c/GKD-c_1_n500_m50.txt best_known_results.csv
 ```
 
 `time_limit_seconds` defaults to 600; zero disables the limit. `index_base` can
