@@ -23,7 +23,7 @@ The fixed-cardinality binary quadratic program is:
 
 where `Q` is a symmetric matrix and `k` represents the cardinality constraint.
 
-The benchmark instances are stored in the `dataset` directory. The collection contains instances from:
+The smoke benchmark instances are stored in the `dataset` directory. The collection contains instances from:
 
 - Maximum Dispersion Problem (MDP)
 - Maximum Clique Problem (MCP)
