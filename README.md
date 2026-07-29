@@ -181,6 +181,7 @@ List all available benchmark and build targets with:
 
 ```bash
 make help
+```
 
 Raw logs and CSV summaries are written to `benchmark_results/`.
 
