@@ -34,43 +34,41 @@ The smoke benchmark instances are stored in the `dataset` directory. The collect
 - A C++20 compiler with Parallel STL support
 - CMake 3.16 or newer
 - GNU Make
+- Python 3 for tests and benchmark scripts
+- TBB when required by the selected Parallel STL implementation
 
-LLVM 22 with libc++ uses the native libdispatch backend; the build enables
-LLVM's experimental library support automatically. LLVM is the default when
-the Homebrew LLVM installation is available because it is fastest on the
-current optimized benchmark. The optimized kernels should still be benchmarked
-with both compilers. The
-libstdc++ Parallel STL needs TBB for concurrent execution. CMake detects and
-links TBB automatically for GNU builds; without it, libstdc++ falls back to
-serial execution.
+The compiler and parallel backend depend on the software available on the machine. CMake reports the selected backend during configuration.
 
 ## Build
 
-From the repository root:
+From the repository root, run:
 
 ```bash
 make
 ```
 
-The `Makefile` wraps the CMake build. To select a compiler or build directory:
+Compiler-specific builds are also available:
 
 ```bash
-make CXX=/path/to/clang++ BUILD_DIR=build-llvm JOBS=8
-make CXX=/path/to/g++-16 BUILD_DIR=build-gcc JOBS=8
+make build-gcc
+make build-llvm
 ```
 
-The equivalent convenience targets are `make build-llvm`, `make build-gcc`,
-and `make test-compilers`. Optimized machine-specific builds enable LTO and
-native CPU tuning:
+Optimized builds with LTO and native CPU tuning can be created with:
 
 ```bash
-make build-fast          # preferred LLVM/libdispatch build
+make build-fast
 make build-gcc-fast
 make build-llvm-fast
 ```
 
-Profile-guided builds train on one representative dense and sparse instance,
-then rebuild with LTO, native tuning, and the collected profile:
+To select a compiler explicitly:
+
+```bash
+make CXX=/path/to/compiler BUILD_DIR=build-custom
+```
+
+Profile-guided builds are available through:
 
 ```bash
 make pgo-gcc
@@ -160,9 +158,9 @@ standard-library implementation.
 
 A positive time limit is the explicit exception because machine speed controls
 how many epochs finish. Timing measurements such as TTS and wall time naturally
-vary even when the solution is identical. Run the LLVM/GCC fixed-work
-regression with `make check-determinism`. Full audit details are in
-`benchmark_results/DETERMINISM_REPORT.md`.
+vary even when the solution is identical. 
+
+Check deterministic fixed-work behavior with `make check-determinism`.
 
 ## Reproducible smoke benchmark
 
@@ -173,40 +171,20 @@ threads and one fixed-seed run per instance:
 make benchmark
 ```
 
-Raw logs and a CSV summary are written under `benchmark_results/`.
-The measured OpenMP-to-Parallel-STL comparison is documented in
-`benchmark_results/PSTL_REPORT.md`.
-The LLVM/libdispatch versus GCC/TBB comparison is documented in
-`benchmark_results/COMPILER_REPORT.md`.
-The current parser, kernel, deterministic overdecomposition, LTO/native, and
-PGO measurements are documented in `benchmark_results/OPTIMIZATION_REPORT.md`.
-The deterministic logical-counter scheduler and current comparison against the
-`stl` branch are documented in
-`benchmark_results/COUNTER_SCHEDULER_REPORT.md`.
-The ten-core, time-limit-free GBP benchmark is documented in
-`benchmark_results/GBP_FIXED_WORK_REPORT.md` and can be reproduced with
-`make benchmark-gbp-fixed`.
-
-Benchmark settings can be overridden without editing files:
-
-```bash
-make benchmark BENCHMARK_PHASE=trial BENCHMARK_THREADS=8 SOLVER_TIME_LIMIT=60 BENCHMARK_TIMEOUT=75
-```
-
-Use `BENCHMARK_LANES_PER_WORKER` to record and test a different deterministic
-overdecomposition factor. `make benchmark-fast` benchmarks the LLVM
-LTO/native build, and `make benchmark-pgo` trains and benchmarks both PGO
-builds.
-
-Run the same benchmark sequentially with LLVM/libdispatch and GCC/TBB using:
+Run the benchmark sequentially with both configured compiler toolchains using:
 
 ```bash
 make benchmark-compilers
 ```
 
-Run the regression tests with `make test` and list all Make targets with
-`make help`.
+List all available benchmark and build targets with:
 
-## Related link:
+```bash
+make help
+
+Raw logs and CSV summaries are written to `benchmark_results/`.
+
+
+## Related repository
 
 - [Benchmark instances used in the computational study conducted in the paper](https://github.com/LeThiThanhTu/Benchmark_instances_FCBQP)

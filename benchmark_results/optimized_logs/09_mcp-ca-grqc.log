@@ -1,17 +1,24 @@
 Data type = 2, n = 5241, k = 44, input entries = 14484, full nnz = 28968, density = 0.105461%, storage = CSR sparse, symmetric pairs supplied twice = 0, index base = 1-based
-
 Sense: max
 Scale: full
 Runs: 1
+Workers: 4
+Epoch lanes: 4
+Elite group size: 4
+Starts: 200000
+Construction attempts: 200
+Parallel backend: C++20 PSTL/TBB
 Best-known objective = 1892.000000000
-Run 1/1: best objective = 1892.000000000, reached best-known = YES, TTS to best-known (s) = 0.000490, time to run-best (s) = 0.000492, runtime (s) = 0.000513
+Run 1/1: best objective = 1892.000000000, reached best-known = YES, TTS to best-known (s) = 0.001826, target epoch = 1, start to run-best = 1, time to run-best (s) = 0.001941, runtime (s) = 0.002024
+Logical work: deterministic frontier = 96
 
 Summary over 1 runs
 Instance name = ca-GrQc_n5241_m44
 Best-known obj from CSV = 1892.000000000
 Best found obj = 1892.000000000
+Solution fingerprint = 64fb04c82bd41aa8
 Runtime limit: 90 seconds
 Average obj = 1892.000000000
-Average TTS = 0.000490
+Average TTS = 0.001826
 Times reaching best-known = 1
 Selected vars of best run: 10 124 148 317 446 559 599 677 846 935 1271 1353 1401 1606 1814 1975 2243 2278 2465 2489 2553 2565 2822 2867 2901 3044 3494 3501 3778 3892 4023 4058 4153 4167 4233 4282 4324 4408 4553 4601 4681 4981 5056 5148

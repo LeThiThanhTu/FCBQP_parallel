@@ -1,7 +1,7 @@
 LLVM_CXX_CANDIDATE := $(firstword $(wildcard /opt/homebrew/opt/llvm/bin/clang++ /usr/local/opt/llvm/bin/clang++))
-GCC_CXX_CANDIDATE := $(firstword $(wildcard /opt/homebrew/bin/g++-16 /usr/local/bin/g++-16))
+GCC_CXX_CANDIDATE := $(firstword $(wildcard /opt/homebrew/bin/g++ /usr/local/bin/g++))
 LLVM_CXX ?= $(if $(LLVM_CXX_CANDIDATE),$(LLVM_CXX_CANDIDATE),clang++)
-GCC_CXX ?= $(if $(GCC_CXX_CANDIDATE),$(GCC_CXX_CANDIDATE),g++-16)
+GCC_CXX ?= $(if $(GCC_CXX_CANDIDATE),$(GCC_CXX_CANDIDATE),g++)
 PREFERRED_CXX := $(if $(LLVM_CXX_CANDIDATE),$(LLVM_CXX),$(GCC_CXX))
 ifeq ($(origin CXX),default)
 CXX := $(PREFERRED_CXX)
@@ -19,7 +19,25 @@ LLVM_PGO_BUILD_DIR ?= build-llvm-pgo
 GCC_PGO_BUILD_DIR ?= build-gcc-pgo
 LLVM_PGO_DATA_DIR ?= $(LLVM_PGO_BUILD_DIR)/pgo-data
 GCC_PGO_DATA_DIR ?= $(GCC_PGO_BUILD_DIR)/pgo-data
-LLVM_PROFDATA ?= $(dir $(LLVM_CXX))llvm-profdata
+LLVM_VERSION_MAJOR := $(shell $(LLVM_CXX) -dumpversion 2>/dev/null | cut -d. -f1)
+GCC_VERSION_MAJOR := $(shell $(GCC_CXX) -dumpfullversion -dumpversion 2>/dev/null | cut -d. -f1)
+
+LLVM_BACKEND ?= tbb
+GCC_BACKEND ?= tbb
+
+LLVM_BENCHMARK_PHASE ?= clang$(LLVM_VERSION_MAJOR)_$(LLVM_BACKEND)
+GCC_BENCHMARK_PHASE ?= gcc$(GCC_VERSION_MAJOR)_$(GCC_BACKEND)
+
+LLVM_PROFDATA ?= $(shell \
+	compiler_path="$$(command -v "$(LLVM_CXX)" 2>/dev/null)"; \
+	compiler_dir="$$(dirname "$$compiler_path")"; \
+	if [ -x "$$compiler_dir/llvm-profdata" ]; then \
+		printf '%s\n' "$$compiler_dir/llvm-profdata"; \
+	elif command -v "llvm-profdata-$(LLVM_VERSION_MAJOR)" >/dev/null 2>&1; then \
+		command -v "llvm-profdata-$(LLVM_VERSION_MAJOR)"; \
+	else \
+		command -v llvm-profdata 2>/dev/null; \
+	fi)
 EXTRA_CMAKE_ARGS ?=
 
 PGO_DENSE_INSTANCE ?= dataset/MDP/MDG-a_n2000/MDG-a_21_n2000_m200.txt
@@ -39,9 +57,9 @@ SOLVER_TIME_LIMIT ?= 90
 BENCHMARK_TIMEOUT ?= 105
 DETERMINISM_STARTS ?= 4
 DETERMINISM_TIMEOUT ?= 180
-GBP_BENCHMARK_PHASE ?= gbp10_fixed230_codex_gcc
+GBP_BENCHMARK_PHASE ?= gbp10_fixed230_gcc
 GBP_PGO_BENCHMARK_PHASE ?= gbp10_fixed230_pgo_gcc
-GBP_PORTFOLIO_PHASE ?= gbp10_portfolio4_codex_gcc
+GBP_PORTFOLIO_PHASE ?= gbp10_portfolio4_gcc
 GBP_BENCHMARK_THREADS ?= 10
 GBP_BENCHMARK_REPETITIONS ?= 3
 GBP_BENCHMARK_STARTS ?= 230
@@ -163,10 +181,12 @@ benchmark-pgo-gcc: pgo-gcc
 		--timeout "$(BENCHMARK_TIMEOUT)"
 
 benchmark-llvm:
-	$(MAKE) benchmark CXX="$(LLVM_CXX)" BUILD_DIR="$(LLVM_BUILD_DIR)" BENCHMARK_PHASE=llvm22_dispatch
+	$(MAKE) benchmark CXX="$(LLVM_CXX)" BUILD_DIR="$(LLVM_BUILD_DIR)" \
+		BENCHMARK_PHASE="$(LLVM_BENCHMARK_PHASE)"
 
 benchmark-gcc:
-	$(MAKE) benchmark CXX="$(GCC_CXX)" BUILD_DIR="$(GCC_BUILD_DIR)" BENCHMARK_PHASE=gcc16_tbb
+	$(MAKE) benchmark CXX="$(GCC_CXX)" BUILD_DIR="$(GCC_BUILD_DIR)" \
+		BENCHMARK_PHASE="$(GCC_BENCHMARK_PHASE)"
 
 benchmark-compilers: benchmark-llvm benchmark-gcc
 
@@ -207,7 +227,7 @@ benchmark-gbp-portfolio: build-gcc-fast
 		--solver-time-limit 0 \
 		--timeout "$(GBP_BENCHMARK_TIMEOUT)" \
 		--instance crack.graph \
-		--instance whitaker3.graph
+		--instance cti.graph
 	python3 tests/check_repeated_benchmark.py \
 		"benchmark_results/$(GBP_PORTFOLIO_PHASE).csv"
 
@@ -240,7 +260,7 @@ help:
 	@echo "  make benchmark-fast  Benchmark the LLVM LTO/native build"
 	@echo "  make benchmark-gbp-fixed  Run the deterministic 10-core GBP benchmark"
 	@echo "  make benchmark-gbp-pgo-gcc  Train GCC PGO and run the GBP benchmark"
-	@echo "  make benchmark-gbp-portfolio  Run the deterministic crack/whitaker3 portfolio"
+	@echo "  make benchmark-gbp-portfolio  Run the deterministic crack/cti portfolio"
 	@echo "  make benchmark-pgo   Train and benchmark both PGO builds"
 	@echo "  make check-determinism  Compare fixed-work LLVM and GCC results"
 	@echo "  make clean        Remove BUILD_DIR"

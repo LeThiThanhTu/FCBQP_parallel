@@ -1,7 +1,0 @@
-compiler,backend,seed,budget_seconds,best_found,reached_best_known,tts_seconds,runtime_seconds
-LLVM-22.1.8,libdispatch,1,10,562.000000000,NO,unknown,10.000218
-LLVM-22.1.8,libdispatch,2,10,453.000000000,NO,unknown,10.000297
-LLVM-22.1.8,libdispatch,3,10,444.000000000,NO,unknown,10.000304
-GCC-16.1.0,TBB-2023.1.0,1,10,185.000000000,NO,unknown,10.000192
-GCC-16.1.0,TBB-2023.1.0,2,10,184.000000000,YES,2.733004,2.733131
-GCC-16.1.0,TBB-2023.1.0,3,10,184.000000000,YES,4.845777,4.845897

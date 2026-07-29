@@ -92,14 +92,10 @@ target_link_libraries(main PRIVATE Threads::Threads)
 # libstdc++ selects its TBB Parallel STL backend when the TBB headers are on
 # the target's include path. Linking the imported target supplies both the
 # headers and runtime without relying on Homebrew-specific paths.
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    find_package(TBB CONFIG QUIET)
-    if(TBB_FOUND)
-        target_link_libraries(main PRIVATE TBB::tbb)
-        message(STATUS "GNU Parallel STL backend: TBB")
-    else()
-        message(WARNING "TBB was not found; libstdc++ may use its serial Parallel STL backend")
-    endif()
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT APPLE)
+    find_package(TBB CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE TBB::tbb)
+    message(STATUS "Parallel STL backend: TBB")
 endif()
 
 include(CTest)

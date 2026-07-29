@@ -46,7 +46,7 @@ def main() -> int:
     parser.add_argument(
         "--legacy-interface",
         action="store_true",
-        help="omit codex-only index-base, worker, and start arguments",
+        help="omit the extended index-base, worker, and start arguments",
     )
     args = parser.parse_args()
     if args.threads <= 0:

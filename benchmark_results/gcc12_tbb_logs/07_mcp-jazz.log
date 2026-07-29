@@ -1,0 +1,24 @@
+Data type = 2, n = 198, k = 30, input entries = 2742, full nnz = 5484, density = 13.988369%, storage = dense matrix, symmetric pairs supplied twice = 0, index base = 1-based
+Sense: max
+Scale: full
+Runs: 1
+Workers: 4
+Epoch lanes: 4
+Elite group size: 4
+Starts: 200000
+Construction attempts: 200
+Parallel backend: C++20 PSTL/TBB
+Best-known objective = 870.000000000
+Run 1/1: best objective = 870.000000000, reached best-known = YES, TTS to best-known (s) = 0.000248, target epoch = 1, start to run-best = 1, time to run-best (s) = 0.000248, runtime (s) = 0.000771
+Logical work: deterministic frontier = 160
+
+Summary over 1 runs
+Instance name = jazz_n198_m30
+Best-known obj from CSV = 870.000000000
+Best found obj = 870.000000000
+Solution fingerprint = 44ecc1a6b02b7f80
+Runtime limit: 90 seconds
+Average obj = 870.000000000
+Average TTS = 0.000248
+Times reaching best-known = 1
+Selected vars of best run: 32 33 35 40 44 58 60 62 63 64 65 66 98 99 100 101 105 106 107 108 109 110 122 123 131 132 135 154 168 179
