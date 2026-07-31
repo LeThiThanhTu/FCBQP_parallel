@@ -170,7 +170,11 @@ A positive time limit is the explicit exception because machine speed controls
 how many epochs finish. Timing measurements such as TTS and wall time naturally
 vary even when the solution is identical. 
 
-Check deterministic fixed-work behavior with `make check-determinism`.
+Check deterministic fixed-work behavior with 
+
+```bash
+make check-determinism
+```
 
 ## Reproducible smoke benchmark
 
