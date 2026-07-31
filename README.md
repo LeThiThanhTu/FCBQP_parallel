@@ -51,6 +51,8 @@ Compiler-specific builds are also available:
 
 ```bash
 make build-gcc
+```
+```bash
 make build-llvm
 ```
 
@@ -58,7 +60,11 @@ Optimized builds with LTO and native CPU tuning can be created with:
 
 ```bash
 make build-fast
+```
+```bash
 make build-gcc-fast
+```
+```bash
 make build-llvm-fast
 ```
 
@@ -72,6 +78,8 @@ Profile-guided builds are available through:
 
 ```bash
 make pgo-gcc
+```
+```bash
 make pgo-llvm
 ```
 
@@ -85,6 +93,8 @@ The equivalent direct CMake commands remain available:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+```
+```bash
 cmake --build build --parallel
 ```
 
