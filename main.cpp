@@ -342,10 +342,6 @@ void parallel_for_workers(int worker_count, Function&& function) {
       return;
    }
 
-   // Long-lived solver tasks need more input elements than workers: PSTL
-   // implementations are allowed to keep short ranges serial. Lightweight
-   // tickets expose enough parallelism, while the atomic claim ensures that
-   // exactly worker_count expensive tasks are executed.
    constexpr size_t tickets_per_worker = 256;
    const size_t ticket_count = std::max<size_t>(1024, static_cast<size_t>(worker_count) * tickets_per_worker);
    static thread_local std::vector<unsigned char> tickets;
@@ -373,10 +369,6 @@ uint64_t bounded_random(DeterministicRng& rng, uint64_t bound) {
    }
    if (bound == 1) return 0;
 
-   // Draw the minimum number of low-order random bits and reject the unused
-   // tail.  This explicitly specifies the mapping used by the fast libc++
-   // uniform_int_distribution path without depending on a standard-library
-   // implementation, so GCC and Clang consume the same mt19937_64 stream.
    const unsigned bits = std::bit_width(bound - 1);
    const uint64_t mask = (bits == 64U)
       ? std::numeric_limits<uint64_t>::max()
@@ -1334,10 +1326,6 @@ static int tabu_tenure_T(int T_nimp, const Params& par) {
    return T;
 }
 
-// A fully specified nth-element implementation.  The partition layout is
-// intentionally the same on libc++ and libstdc++ because the heuristic draws
-// a random element from the selected prefix; the standard only specifies the
-// partition, not the order inside that prefix.
 template <class RandomAccessIterator, class Compare>
 bool deterministic_sort3(
    RandomAccessIterator x,
@@ -1680,9 +1668,6 @@ MoveChoice find_sparse_tabu_move(
          const int b = incoming.position;
          if (scratch.edge_generation[b] == generation) continue;
          const int j = incoming.variable;
-         // With q(i,j)=0 the move delta is separable. Incoming candidates
-         // are sorted by their complete term, so the first admissible
-         // non-neighbour is the exact deterministic minimum for this i.
          const double delta = outgoing_term + incoming.key;
 
          if (!found_any_non_edge) {
@@ -2946,10 +2931,6 @@ int main(int argc, char* argv[]) {
                }
                if (target_cutoff != std::numeric_limits<uint64_t>::max()) {
                   for (WorkerSearchState& state : lane_states) {
-                     // Every lane finishes its current start before this
-                     // deterministic barrier. Work beyond the first target
-                     // frontier is excluded from the accepted result; the full
-                     // execution is nevertheless schedule independent.
                      if (state.epoch_work > target_cutoff) {
                         state.result = state.epoch_baseline_result;
                         state.candidate_ready = false;
@@ -2968,9 +2949,6 @@ int main(int argc, char* argv[]) {
                   break;
                }
 
-               // Every lane reads its group's immutable epoch snapshot. Merge
-               // in lane-id order so scheduling speed cannot affect any next
-               // snapshot or search trajectory.
 #if defined(FCBQP_ENABLE_PHASE_PROFILING)
                const auto elite_merge_begin = std::chrono::steady_clock::now();
 #endif

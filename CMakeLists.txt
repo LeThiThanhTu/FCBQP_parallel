@@ -69,14 +69,11 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     endif()
 endif()
 
-# Keep floating-point expression evaluation consistent across GCC and Clang;
-# fused contraction can otherwise change heuristic tie decisions.
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(main PRIVATE -ffp-contract=off)
 endif()
 
-# LLVM libc++ 22 provides its Parallel STL through the experimental library;
-# on Apple platforms this uses Grand Central Dispatch as the parallel backend.
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     include(CheckCXXCompilerFlag)
     check_cxx_compiler_flag("-fexperimental-library" FCBQP_HAS_EXPERIMENTAL_LIBRARY)
@@ -89,9 +86,7 @@ endif()
 find_package(Threads REQUIRED)
 target_link_libraries(main PRIVATE Threads::Threads)
 
-# libstdc++ selects its TBB Parallel STL backend when the TBB headers are on
-# the target's include path. Linking the imported target supplies both the
-# headers and runtime without relying on Homebrew-specific paths.
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT APPLE)
     find_package(TBB CONFIG REQUIRED)
     target_link_libraries(main PRIVATE TBB::tbb)
