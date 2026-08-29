@@ -23,6 +23,8 @@ The fixed-cardinality binary quadratic program is:
 
 where `Q` is a symmetric matrix and `k` represents the cardinality constraint.
 
+Our code is specifically designed for instances with $k \leq n/2$.
+
 The smoke benchmark instances are stored in the `dataset` directory. The collection contains instances from:
 
 - Maximum Dispersion Problem (MDP)
