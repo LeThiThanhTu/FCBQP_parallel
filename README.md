@@ -25,8 +25,6 @@ where $Q$ is a symmetric matrix and $k$ represents the cardinality constraint.
 
 Without loss of generality, we assume that $k \leq n/2$, and our code is specifically designed for instances satisfying this condition.
 
-Without loss of generality, we assume that $k \leq n/2$, and our code is specifically designed for instances satisfying this condition.
-
 The smoke benchmark instances are stored in the `dataset` directory. The collection contains instances from:
 
 - Maximum Dispersion Problem (MDP)
