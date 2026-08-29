@@ -21,7 +21,9 @@ The fixed-cardinality binary quadratic program is:
 \end{aligned}
 ```
 
-where `Q` is a symmetric matrix and `k` represents the cardinality constraint.
+where $Q$ is a symmetric matrix and $k$ represents the cardinality constraint.
+
+Without loss of generality, we assume that $k \leq n/2$, and our code is specifically designed for instances satisfying this condition.
 
 Without loss of generality, we assume that $k \leq n/2$, and our code is specifically designed for instances satisfying this condition.
 
