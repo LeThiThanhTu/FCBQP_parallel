@@ -21,9 +21,11 @@ The fixed-cardinality binary quadratic program is:
 \end{aligned}
 ```
 
-where $Q$ is the cost matrix and $k$ represents the cardinality constraint. W.o.l.g., we can assume that $Q$ is symmetric and $k \leq n/2$.
+where $Q$ is the cost matrix and $k$ represents the cardinality constraint. 
 
-In the case of $k > n/2$, our code transforms the FCBQP to the equivalent problem with $k < n/2$.
+Without loss of generality, we assume that $Q$ is symmetric and $k \leq n/2$.
+
+For instances with $k > n/2$, the code automatically applies the transformation $y=\mathbf{1}-x$, resulting in an equivalent FCBQP with cardinality $k' = n-k < n/2$. The corresponding quadratic objective matrix and constant objective offset are transformed accordingly.
 
 The smoke benchmark instances are stored in the `dataset` directory. The collection contains instances from:
 
