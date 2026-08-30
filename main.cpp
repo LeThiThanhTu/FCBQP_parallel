@@ -28,6 +28,7 @@
 struct Instance {
    int n = 0;
    int k = 0;
+   double objective_offset = 0.0;
    bool sparse = false;
    double density = 0.0;
    size_t nnz_full = 0;
@@ -465,18 +466,21 @@ static inline const char* print_scale_name(PrintScale scale) {
 
 static inline double output_objective_from_internal(
    double internal_obj,
+   double internal_offset,
    ObjectiveSense sense,
    PrintScale scale
 ) {
+   const double adjusted_obj = internal_obj + internal_offset;
+
    if (sense == ObjectiveSense::Max) {
       return (scale == PrintScale::Full)
-         ? (-1.0) * internal_obj
-         : (-0.5) * internal_obj;
+         ? (-1.0) * adjusted_obj
+         : (-0.5) * adjusted_obj;
    }
 
    return (scale == PrintScale::Full)
-      ? internal_obj
-      : 0.5 * internal_obj;
+      ? adjusted_obj
+      : 0.5 * adjusted_obj;
 }
 
 static inline bool target_reached(
@@ -942,6 +946,124 @@ Instance read_instance(
       << "-based\n";
 
    return ins;
+}
+
+void invert_instance(Instance& ins) {
+   const int n = ins.n;
+   std::vector<double> row_sums(static_cast<size_t>(n), 0.0);
+   double offset_increment = 0.0;
+
+   for (int i = 0; i < n; ++i) {
+      double row_sum = 0.0;
+      if (ins.sparse) {
+         for (int p = ins.row_ptr[i]; p < ins.row_ptr[i + 1]; ++p) {
+            row_sum += ins.val[p];
+            if (!std::isfinite(row_sum)) {
+               throw std::runtime_error("Inversion overflowed while summing a sparse row.");
+            }
+         }
+      }
+      else {
+         const double* row = &ins.Q[static_cast<size_t>(i) * static_cast<size_t>(n)];
+         for (int j = 0; j < n; ++j) {
+            row_sum += row[j];
+            if (!std::isfinite(row_sum)) {
+               throw std::runtime_error("Inversion overflowed while summing a dense row.");
+            }
+         }
+      }
+      row_sums[i] = row_sum;
+      offset_increment += row_sum;
+      if (!std::isfinite(offset_increment)) {
+         throw std::runtime_error("Inversion objective offset is not finite.");
+      }
+   }
+
+   std::vector<double> new_diagonal(static_cast<size_t>(n));
+   for (int i = 0; i < n; ++i) {
+      const double value = ins.diagonal[i] - 2.0 * row_sums[i];
+      if (!std::isfinite(value)) {
+         throw std::runtime_error("Inversion produced a non-finite diagonal coefficient.");
+      }
+      new_diagonal[i] = value;
+   }
+
+   size_t new_nnz_full = ins.nnz_full;
+   if (ins.sparse) {
+      std::vector<int> new_row_ptr(static_cast<size_t>(n) + 1, 0);
+      new_nnz_full = 0;
+      for (int i = 0; i < n; ++i) {
+         for (int p = ins.row_ptr[i]; p < ins.row_ptr[i + 1]; ++p) {
+            if (ins.col_ind[p] != i) ++new_nnz_full;
+         }
+         if (new_diagonal[i] != 0.0) ++new_nnz_full;
+         if (new_nnz_full > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            throw std::runtime_error(
+               "Inverted sparse matrix has too many entries for 32-bit CSR indices."
+            );
+         }
+         new_row_ptr[static_cast<size_t>(i) + 1] = static_cast<int>(new_nnz_full);
+      }
+
+      std::vector<int> new_col_ind(new_nnz_full);
+      std::vector<double> new_val(new_nnz_full);
+      for (int i = 0; i < n; ++i) {
+         int write = new_row_ptr[i];
+         bool diagonal_written = false;
+         for (int p = ins.row_ptr[i]; p < ins.row_ptr[i + 1]; ++p) {
+            const int col = ins.col_ind[p];
+            if (col == i) continue;
+            if (!diagonal_written && new_diagonal[i] != 0.0 && col > i) {
+               new_col_ind[write] = i;
+               new_val[write++] = new_diagonal[i];
+               diagonal_written = true;
+            }
+            new_col_ind[write] = col;
+            new_val[write++] = ins.val[p];
+         }
+         if (!diagonal_written && new_diagonal[i] != 0.0) {
+            new_col_ind[write] = i;
+            new_val[write++] = new_diagonal[i];
+         }
+         if (write != new_row_ptr[static_cast<size_t>(i) + 1]) {
+            throw std::logic_error("Inversion built an inconsistent CSR row.");
+         }
+      }
+      ins.row_ptr = std::move(new_row_ptr);
+      ins.col_ind = std::move(new_col_ind);
+      ins.val = std::move(new_val);
+   }
+   else {
+      for (int i = 0; i < n; ++i) {
+         const bool had_diagonal = ins.diagonal[i] != 0.0;
+         const bool has_diagonal = new_diagonal[i] != 0.0;
+         if (had_diagonal && !has_diagonal) --new_nnz_full;
+         if (!had_diagonal && has_diagonal) ++new_nnz_full;
+         Qref(ins, i, i) = new_diagonal[i];
+      }
+   }
+
+   const double new_offset = ins.objective_offset + offset_increment;
+   if (!std::isfinite(new_offset)) {
+      throw std::runtime_error("Inversion accumulated a non-finite objective offset.");
+   }
+   ins.objective_offset = new_offset;
+   ins.k = n - ins.k;
+   ins.nnz_full = new_nnz_full;
+   ins.diagonal = std::move(new_diagonal);
+   const double denom = static_cast<double>(n) * static_cast<double>(n);
+   ins.density = (denom > 0.0)
+      ? static_cast<double>(ins.nnz_full) / denom
+      : 0.0;
+}
+
+bool canonical_orientation_requires_inversion(const Instance& ins) {
+   return ins.k > ins.n - ins.k;
+}
+bool canonicalize_instance(Instance& ins) {
+   const bool inverted = canonical_orientation_requires_inversion(ins);
+   if (inverted) invert_instance(ins);
+   return inverted;
 }
 
 double objective_x(const std::vector<int>& x, const Instance& ins) {
@@ -1764,7 +1886,7 @@ void tabu_search(
          return;
       }
 
-      const double output_obj =  output_objective_from_internal(candidate_internal_obj, sense, scale);
+      const double output_obj =  output_objective_from_internal(candidate_internal_obj, ins.objective_offset, sense, scale);
 
       if (target_reached(output_obj, best_known.objective, sense)) {
          res.reached_target = true;
@@ -2637,7 +2759,7 @@ void run_worker_start(
       state.incumbent_for_guide = point.x;
       state.no_improve = 0;
 
-      const double output_obj = output_objective_from_internal(state.result.best_obj, sense, scale);
+      const double output_obj = output_objective_from_internal(state.result.best_obj, ins.objective_offset, sense, scale);
       if (best_known.loaded && target_reached(output_obj, best_known.objective, sense)) {
          if (!state.result.reached_target) {
             state.result.reached_target = true;
@@ -2710,6 +2832,8 @@ int main(int argc, char* argv[]) {
       }
 
       Instance ins = read_instance(instance_path, sense, forced_index_base);
+      const int original_k = ins.k;
+      const bool canonical_inverted_from_input = canonicalize_instance(ins);
       const std::string best_known_path = resolve_best_known_objective_path(instance_path, best_known_arg);
       BestKnownObjective best_known;
       if (!best_known_path.empty()) {
@@ -2823,7 +2947,7 @@ int main(int argc, char* argv[]) {
          double run_time_to_target = std::numeric_limits<double>::infinity();
          if (trivial_result.has_value()) {
             global_res = *trivial_result;
-            const double trivial_output = output_objective_from_internal(global_res.best_obj, sense, scale);
+            const double trivial_output = output_objective_from_internal(global_res.best_obj, ins.objective_offset, sense, scale);
             if (best_known.loaded && target_reached(trivial_output, best_known.objective, sense)) {
                run_reached_target = true;
                run_time_to_target = 0.0;
@@ -3032,7 +3156,7 @@ int main(int argc, char* argv[]) {
          }
          auto t1 = std::chrono::steady_clock::now();
          const double elapsed = std::chrono::duration<double>(t1 - t0).count();
-         const double output_obj = output_objective_from_internal(global_res.best_obj, sense, scale);
+         const double output_obj = output_objective_from_internal(global_res.best_obj, ins.objective_offset, sense, scale);
          const bool reached_best_known = best_known.loaded && target_reached(output_obj, best_known.objective, sense);
 
          run_output_objs.push_back(output_obj);
@@ -3112,13 +3236,22 @@ int main(int argc, char* argv[]) {
 
       const std::string instance_name = basename_without_extension(instance_path);
 
+      std::vector<int> reported_best_x = best_run_res.best_x;
+      if (canonical_inverted_from_input) {
+         for (int& value : reported_best_x) value = 1 - value;
+      }
+      if (!reported_best_x.empty() &&
+         std::accumulate(reported_best_x.begin(), reported_best_x.end(), 0) != original_k) {
+         throw std::logic_error("Reported solution has the wrong original cardinality.");
+      }
+
       std::cout << "\nSummary over " << num_runs << " runs\n";
       std::cout << "Instance name = " << instance_name << "\n";
       std::cout << "Best-known obj from CSV = " << (best_known.loaded ? best_known_str : "") << "\n";
       std::cout << "Best found obj = " << std::fixed << std::setprecision(9) << best_output_obj << "\n";
       std::ostringstream fingerprint;
       fingerprint << std::hex << std::setw(16) << std::setfill('0')
-         << solution_fingerprint(best_run_res.best_x);
+         << solution_fingerprint(reported_best_x);
       std::cout << "Solution fingerprint = " << fingerprint.str() << "\n";
       std::cout << "Runtime limit: " << static_cast<int>(par.time_limit_seconds) << " seconds\n";
       std::cout << "Average obj = " << std::fixed << std::setprecision(9) << average_obj << "\n";
@@ -3135,7 +3268,7 @@ int main(int argc, char* argv[]) {
          std::cout << "Selected vars of best run: ";
          bool first_selected = true;
          for (int i = 0; i < ins.n; i++) {
-            if (best_run_res.best_x[i] == 1) {
+            if (reported_best_x[i] == 1) {
                if (!first_selected) std::cout << " ";
                std::cout << (i + 1);
                first_selected = false;
