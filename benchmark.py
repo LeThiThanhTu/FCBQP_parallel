@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Run a fixed-seed ten-instance FCBQP smoke benchmark."""
 
 from __future__ import annotations
 
