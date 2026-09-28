@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Verify that repeated fixed-work benchmark result fields are identical."""
 
 from __future__ import annotations
 

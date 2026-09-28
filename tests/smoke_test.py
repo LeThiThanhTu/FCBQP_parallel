@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Small integration checks for parser and trivial-cardinality behavior."""
 
 from __future__ import annotations
 

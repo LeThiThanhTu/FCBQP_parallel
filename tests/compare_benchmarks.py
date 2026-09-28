@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Compare all non-timing fields from two deterministic benchmark CSVs."""
 
 from __future__ import annotations
 

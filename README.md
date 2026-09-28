@@ -25,8 +25,6 @@ where $Q$ is the cost matrix and $k$ represents the cardinality constraint.
 
 Without loss of generality, we assume that $Q$ is symmetric and $k \leq n/2$.
 
-For instances with $k > n/2$, the code automatically applies the transformation $y=\mathbf{1}-x$, resulting in an equivalent FCBQP with cardinality $k' = n-k < n/2$. The corresponding quadratic objective matrix and constant objective offset are transformed accordingly.
-
 The smoke benchmark instances are stored in the `dataset` directory. The collection contains instances from:
 
 - Maximum Dispersion Problem (MDP)
@@ -162,6 +160,16 @@ elite-sharing groups. Group membership and all exchanges remain deterministic.
 `FCBQP_CONSTRUCTION_MAX_ATTEMPTS` sets the deterministic retry budget for a
 diverse greedy construction; the quality-preserving default is 200.
 
+## Cardinality-complement transformation
+
+For instances with $k > n/2$, the code automatically applies the transformation $y=\mathbf{1}-x$, resulting in an equivalent FCBQP with cardinality $k' = n-k < n/2$. The corresponding quadratic objective matrix and constant objective offset are transformed accordingly.
+
+The repository includes regression tests for solver correctness and the cardinality-complement transformation. Run all tests using:
+
+```bash
+make test
+```
+
 ## Determinism
 
 With a fixed input, seed, worker count, epoch-lane factor, and start budget,
@@ -201,7 +209,6 @@ List all available benchmark and build targets with:
 make help
 ```
 
-Raw logs and CSV summaries are written to `benchmark_results/`.
 
 
 ## Related repository
