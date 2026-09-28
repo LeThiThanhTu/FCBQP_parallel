@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Benchmark every GBP instance with repeatable fresh-process runs."""
 
 from __future__ import annotations
 
