@@ -182,12 +182,12 @@ LA_n6000_m500,62332519.393470,OBMA [3] ,reference/best
 Bibsonomy_n9269_m100,417.891670,Gurobi/ [7],reference/opt
 Bibsonomy_n9269_m200,594.532680,Gurobi/ [7],reference/opt
 Bibsonomy_n9269_m300,733.412140,Gurobi/ [7],reference/opt
-Bibsonomy_n9269_m400,854.709540,Gurobi/ [7],reference/opt
+Bibsonomy_n9269_m400,854.72223,Gurobi/ [7],reference/opt
 Bibsonomy_n9269_m500,963.024160,Gurobi/ [7],reference/opt
 DBLP_n7159_m100,139.141710,Gurobi/ [7],reference/opt
 DBLP_n7159_m200,239.888530,Gurobi/ [7],reference/opt
 DBLP_n7159_m300,324.051630,Gurobi/ [7],reference/opt
-DBLP_n7159_m400,397.099400,Gurobi/ [7],reference/opt
+DBLP_n7159_m400,397.10394,Gurobi/ [7],reference/opt
 DBLP_n7159_m500,462.223460,Gurobi/ [7],reference/opt
 IMDB_n1021_m100,73.725110,Gurobi/ [7],reference/opt
 IMDB_n1021_m200,135.451230,Gurobi/ [7],reference/opt
@@ -202,27 +202,27 @@ StackOverflow_n8834_m500,202.688120,Gurobi/ [7],reference/opt
 synthetic_10_n7000_m100,142.716650,Gurobi/ [7],reference/opt
 synthetic_10_n7000_m200,255.612690,Gurobi/ [7],reference/opt
 synthetic_10_n7000_m300,354.480310,Gurobi/ [7],reference/opt
-synthetic_10_n7000_m400,442.882505,Gurobi/ [7],reference/opt
+synthetic_10_n7000_m400,442.890615,Gurobi/ [7],reference/opt
 synthetic_10_n7000_m500,524.157270,Gurobi/ [7],reference/opt
 synthetic_1_n7000_m100,142.136800,Gurobi/ [7],reference/opt
 synthetic_1_n7000_m200,247.797060,Gurobi/ [7],reference/opt
-synthetic_1_n7000_m300,336.303275,Gurobi/ [7],reference/opt
-synthetic_1_n7000_m400,416.794595,Gurobi/ [7],reference/opt
+synthetic_1_n7000_m300,336.30566,Gurobi/ [7],reference/opt
+synthetic_1_n7000_m400,416.795085,Gurobi/ [7],reference/opt
 synthetic_1_n7000_m500,488.819325,Gurobi/ [7],reference/opt
 synthetic_2_n7000_m100,160.608420,Gurobi/ [7],reference/opt
 synthetic_2_n7000_m200,282.062190,Gurobi/ [7],reference/opt
-synthetic_2_n7000_m300,388.363510,Gurobi/ [7],reference/opt
+synthetic_2_n7000_m300,388.39409,Gurobi/ [7],reference/opt
 synthetic_2_n7000_m400,483.961750,Gurobi/ [7],reference/opt
 synthetic_2_n7000_m500,572.514190,Gurobi/ [7],reference/opt
 synthetic_3_n7000_m100,156.429310,Gurobi/ [7],reference/opt
 synthetic_3_n7000_m200,266.122850,Gurobi/ [7],reference/opt
 synthetic_3_n7000_m300,361.996630,Gurobi/ [7],reference/opt
-synthetic_3_n7000_m400,446.825200,Gurobi/ [7],reference/opt
+synthetic_3_n7000_m400,446.82528,Gurobi/ [7],reference/opt
 synthetic_3_n7000_m500,523.845630,Gurobi/ [7],reference/opt
 synthetic_4_n7000_m100,129.363420,Gurobi/ [7],reference/opt
 synthetic_4_n7000_m200,238.347300,Gurobi/ [7],reference/opt
 synthetic_4_n7000_m300,337.328620,Gurobi/ [7],reference/opt
-synthetic_4_n7000_m400,428.813200,Gurobi/ [7],reference/opt
+synthetic_4_n7000_m400,428.83992,Gurobi/ [7],reference/opt
 synthetic_4_n7000_m500,511.227530,Gurobi/ [7],reference/opt
 synthetic_5_n7000_m100,147.212980,Gurobi/ [7],reference/opt
 synthetic_5_n7000_m200,256.883510,Gurobi/ [7],reference/opt
@@ -232,7 +232,7 @@ synthetic_5_n7000_m500,520.362810,Gurobi/ [7],reference/opt
 synthetic_6_n7000_m100,140.004530,Gurobi/ [7],reference/opt
 synthetic_6_n7000_m200,247.845850,Gurobi/ [7],reference/opt
 synthetic_6_n7000_m300,338.793630,Gurobi/ [7],reference/opt
-synthetic_6_n7000_m400,419.417520,Gurobi/ [7],reference/opt
+synthetic_6_n7000_m400,419.42607,Gurobi/ [7],reference/opt
 synthetic_6_n7000_m500,494.061990,Gurobi/ [7],reference/opt
 synthetic_7_n7000_m100,161.743100,Gurobi/ [7],reference/opt
 synthetic_7_n7000_m200,285.377460,Gurobi/ [7],reference/opt
@@ -248,7 +248,7 @@ synthetic_9_n7000_m100,145.036110,Gurobi/ [7],reference/opt
 synthetic_9_n7000_m200,257.402590,Gurobi/ [7],reference/opt
 synthetic_9_n7000_m300,356.186360,Gurobi/ [7],reference/opt
 synthetic_9_n7000_m400,447.376880,Gurobi/ [7],reference/opt
-synthetic_9_n7000_m500,533.201690,Gurobi/ [7],reference/opt
+synthetic_9_n7000_m500,533.21672,Gurobi/ [7],reference/opt
 4elt.graph,139.000000,Gurobi / [10],best-known
 bcsstk29.graph,2843.000000,[10],best-known
 bcsstk30.graph,6394.000000,[10],best-known
