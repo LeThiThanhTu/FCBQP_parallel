@@ -114,13 +114,41 @@ The default settings for the benchmark instances are:
 From the repository root:
 
 ```bash
-./build/main <max|min> <full|half> <instance.qsc_or_txt> [best_known_results.csv_or_folder] [base_seed] [runs] [time_limit_seconds] [index_base] [workers] [starts]
+./build/main <max|min> <full|half> <instance> [best_known_results.csv_file] [base_seed] [runs] [time_limit_seconds] [index_base] [workers] [starts]
 ```
 
-or simply
+or without best known values:
 
 ```bash
-./build/main <max|min> <full|half> <instance.qsc_or_txt> [best_known_results.csv_or_folder]
+./build/main <max|min> <full|half> <instance> "" [base_seed] [runs] [time_limit_seconds] [index_base] [workers] [starts]
+```
+
+For example: 
+
+```bash
+./build/main max half dataset/MDP/GKD-c/GKD-c_1_n500_m50.txt best_known_results.csv 1 5 60 auto 8 160000
+```
+
+runs the instance with base seed 1, five independent runs, a 60-second time limit **per run**, automatic index-base detection, eight workers, and up to 160000 starts **per run**. Runs may terminate earlier upon reaching a loaded best-known/reference objective or the time limit.
+
+The default base seed is 1, the default number of runs is 10, and `time_limit_seconds` defaults to 600; zero disables the time limit. `index_base` can
+be `auto`, `0`, or `1`. If the indices are compatible with both conventions,
+the program rejects the ambiguous input unless `0` or `1` is supplied.
+
+Matrix data may contain one triangle of a symmetric matrix or both symmetric
+entries. When both `(i,j)` and `(j,i)` are present, their values must agree within a numerical tolerance; they are counted once rather than doubled. The input parser accepts three header formats: `n k`, `n k number_of_entries`, or `k` on the first line followed by `n number_of_entries` on the second line.
+
+Cardinalities from `0` through `n` are accepted. The trivial cases `k = 0`, `k = 1`, `k = n - 1` and `k = n`  are solved directly.
+
+`workers` defaults to the value of `FCBQP_NUM_THREADS`, or to 4 when the
+environment variable is unset. The fixed default prevents machines with
+different core counts from silently defining different searches. The solver
+prints the selected Parallel STL backend at startup. `starts` sets the maximum total number of search starts **per run**, distributed among the logical lanes, and defaults to 200000. A loaded best-known value is used as a target for early stopping; if no matching reference is available, execution continues until the time or start budget is exhausted.
+
+To run with the default setting:
+
+```bash
+./build/main <max|min> <full|half> <instance> [best_known_results.csv_file]
 ```
 
 For example:
@@ -129,22 +157,7 @@ For example:
 ./build/main max half dataset/MDP/GKD-c/GKD-c_1_n500_m50.txt best_known_results.csv
 ```
 
-`time_limit_seconds` defaults to 600; zero disables the limit. `index_base` can
-be `auto`, `0`, or `1`. If the indices are compatible with both conventions,
-the program rejects the ambiguous input unless `0` or `1` is supplied.
-
-Matrix data may contain one triangle of a symmetric matrix or both symmetric
-entries. When both `(i,j)` and `(j,i)` are present, their values must agree;
-they are counted once rather than doubled.
-
-Cardinalities from `0` through `n` are accepted. The trivial cases `k=0`,
-`k=1`, and `k=n` are solved directly.
-
-`workers` defaults to the value of `FCBQP_NUM_THREADS`, or to four when the
-environment variable is unset. The fixed default prevents machines with
-different core counts from silently defining different searches. The solver
-prints the selected Parallel STL backend at startup. `starts` is the
-deterministic total search-start budget and defaults to 200000.
+The `max|min` argument chooses the optimization sense. The solver internally minimizes (negating matrix coefficients for maximization), then restores the requested sense when reporting the objective. `full` reports the objective as $x^\top Qx$, while `half` reports half that value. Best-known/reference values must use the chosen reporting scale.
 
 Each deterministic epoch uses one logical lane per worker by default. Physical
 workers dynamically claim lanes, while results are merged in lane-ID order.
@@ -162,7 +175,19 @@ diverse greedy construction; the quality-preserving default is 200.
 
 ## Cardinality-complement transformation
 
-For instances with $k > n/2$, the code automatically applies the transformation $y=\mathbf{1}-x$, resulting in an equivalent FCBQP with cardinality $k' = n-k < n/2$. The corresponding quadratic objective matrix and constant objective offset are transformed accordingly.
+For instances with $k>n/2$, the solver automatically applies the complement transformation
+
+$$
+y=\mathbf{1}-x,\qquad Q'=Q-2\operatorname{Diag}(Q\mathbf{1}),
+$$
+
+resulting in an equivalent FCBQP with cardinality $k'=n-k<n/2$. The constant objective offset $c=\mathbf{1}^{\top}Q\mathbf{1}$ is retained to recover the original objective value:
+
+$$
+x^{\top}Qx=y^{\top}Q'y+c.
+$$
+
+After solving a complemented instance, the solver restores the original variable assignment and independently checks the reported objective using the original cost matrix and original cardinality constraint. 
 
 The repository includes regression tests for solver correctness and the cardinality-complement transformation. Run all tests using:
 
