@@ -633,7 +633,8 @@ static BestKnownObjective read_best_known_objective_file(
 Instance read_instance(
    const std::string& filename,
    ObjectiveSense sense,
-   std::optional<int> forced_index_base = std::nullopt
+   std::optional<int> forced_index_base = std::nullopt,
+   bool print_data_summary = true
 ) {
    std::ifstream in(filename);
    if (!in) {
@@ -934,16 +935,18 @@ Instance read_instance(
       }
    }
 
-   std::cerr << "Data type = " << detected_type
-      << ", n = " << ins.n
-      << ", k = " << ins.k
-      << ", input entries = " << input_entry_count
-      << ", full nnz = " << ins.nnz_full
-      << ", density = " << std::fixed << std::setprecision(6) << (100.0 * ins.density) << "%"
-      << ", storage = " << (ins.sparse ? "CSR sparse" : "dense matrix")
-      << ", symmetric pairs supplied twice = " << symmetric_pairs
-      << ", index base = " << (shift == 0 ? 0 : 1)
-      << "-based\n";
+   if (print_data_summary) {
+      std::cerr << "Data type = " << detected_type
+         << ", n = " << ins.n
+         << ", k = " << ins.k
+         << ", input entries = " << input_entry_count
+         << ", full nnz = " << ins.nnz_full
+         << ", density = " << std::fixed << std::setprecision(6) << (100.0 * ins.density) << "%"
+         << ", storage = " << (ins.sparse ? "CSR sparse" : "dense matrix")
+         << ", symmetric pairs supplied twice = " << symmetric_pairs
+         << ", index base = " << (shift == 0 ? 0 : 1)
+         << "-based\n";
+   }
 
    return ins;
 }
@@ -2834,6 +2837,10 @@ int main(int argc, char* argv[]) {
       Instance ins = read_instance(instance_path, sense, forced_index_base);
       const int original_k = ins.k;
       const bool canonical_inverted_from_input = canonicalize_instance(ins);
+      if (canonical_inverted_from_input) {
+         std::cout << "Complement transformation applied: original k = " << original_k
+            << ", transformed k = " << ins.k << "\n";
+      }
       const std::string best_known_path = resolve_best_known_objective_path(instance_path, best_known_arg);
       BestKnownObjective best_known;
       if (!best_known_path.empty()) {
@@ -3263,6 +3270,24 @@ int main(int argc, char* argv[]) {
          double diff = recomputed_obj - best_run_res.best_obj;
          if (std::abs(diff) > 1e-5) {
             std::cout << "Wrong obj value !!\n";
+         }
+
+         if (canonical_inverted_from_input) {
+            // Independently verify the restored solution using the original Q and k.
+            Instance original_ins = read_instance(instance_path, sense, forced_index_base, false);
+            const double original_internal_obj = objective_x(reported_best_x, original_ins);
+            const double verified_output_obj = output_objective_from_internal(
+               original_internal_obj, original_ins.objective_offset, sense, scale
+            );
+            const double tolerance = 1e-6 * std::max({
+               1.0, std::abs(verified_output_obj), std::abs(best_output_obj)
+            });
+            if (!std::isfinite(verified_output_obj) ||
+               std::abs(verified_output_obj - best_output_obj) > tolerance) {
+               throw std::logic_error("Objective mismatch with the original cardinality.");
+            }
+            std::cout << "Verification with original cardinality is correct (k = "
+               << original_k << ").\n";
          }
 
          std::cout << "Selected vars of best run: ";
