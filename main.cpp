@@ -3273,7 +3273,6 @@ int main(int argc, char* argv[]) {
          }
 
          if (canonical_inverted_from_input) {
-            // Independently verify the restored solution using the original Q and k.
             Instance original_ins = read_instance(instance_path, sense, forced_index_base, false);
             const double original_internal_obj = objective_x(reported_best_x, original_ins);
             const double verified_output_obj = output_objective_from_internal(
