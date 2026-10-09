@@ -129,7 +129,7 @@ For example:
 ./build/main max half dataset/MDP/GKD-c/GKD-c_1_n500_m50.txt best_known_results.csv 1 5 60 auto 8 160000
 ```
 
-runs the instance with base seed 1, five independent runs, a 60-second time limit **per run**, automatic index-base detection, eight workers, and up to 160000 starts **per run**. Runs may terminate earlier upon reaching a loaded best-known/reference objective or the time limit.
+This command executes 5 independent runs with base seed 1, a time limit of 60 seconds per run, automatic index-base detection, 8 workers, and a maximum of 160000 search starts per run. Each run and logical lane uses a distinct, deterministically random seed. A run terminates when the best-known/reference value is reached, the time limit expires, or the start budget is exhausted.
 
 The default base seed is 1, the default number of runs is 10, and `time_limit_seconds` defaults to 600; zero disables the time limit. `index_base` can
 be `auto`, `0`, or `1`. If the indices are compatible with both conventions,
