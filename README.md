@@ -198,7 +198,7 @@ make test
 ## Determinism
 
 With a fixed input, seed, worker count, epoch-lane factor, and start budget,
-solution fields are deterministic when `time_limit_seconds` is zero. Logical
+solution fields are deterministic when `time_limit_seconds` is 0. Logical
 lanes advance in synchronous search epochs and elite candidates are merged in
 lane-ID order. RNG mapping and candidate tie-breaking are independent of the
 standard-library implementation.
