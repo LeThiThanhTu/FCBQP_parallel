@@ -129,21 +129,21 @@ For example:
 ./build/main max half dataset/MDP/GKD-c/GKD-c_1_n500_m50.txt best_known_results.csv 1 5 60 auto 8 160000
 ```
 
-This command executes 5 independent runs with base seed 1, a time limit of 60 seconds per run, automatic index-base detection, 8 workers, and a maximum of 160000 search starts per run. Each run and logical lane uses a distinct, deterministically random seed. A run terminates when the best-known/reference value is reached, the time limit expires, or the start budget is exhausted.
+This command executes 5 independent runs with base seed 1, a time limit of 60 seconds per run, automatic index-base detection, 8 workers, and a maximum of 160000 search starts per run. Each run and logical lane uses a distinct, deterministically derived pseudorandom seed. A run terminates when the best-known/reference value is reached, the time limit expires, or the start budget is exhausted.
 
-The default base seed is 1, the default number of runs is 10, and `time_limit_seconds` defaults to 600; zero disables the time limit. `index_base` can
+The default base seed is 1, the default number of runs is 10, and `time_limit_seconds` defaults to 600; 0 disables the time limit. `index_base` can
 be `auto`, `0`, or `1`. If the indices are compatible with both conventions,
 the program rejects the ambiguous input unless `0` or `1` is supplied.
 
 Matrix data may contain one triangle of a symmetric matrix or both symmetric
-entries. When both `(i,j)` and `(j,i)` are present, their values must agree within a numerical tolerance; they are counted once rather than doubled. The input parser accepts three header formats: `n k`, `n k number_of_entries`, or `k` on the first line followed by `n number_of_entries` on the second line.
+entries. When both `(i,j)` and `(j,i)` are present, their values must agree within a numerical tolerance; they are counted once rather than doubled.
 
-Cardinalities from `0` through `n` are accepted. The trivial cases `k = 0`, `k = 1`, `k = n - 1` and `k = n`  are solved directly.
+Cardinalities from `0` through `n` are accepted. The trivial cases `k = 0`, `k = 1`, `k = n - 1`, and `k = n`  are solved directly.
 
 `workers` defaults to the value of `FCBQP_NUM_THREADS`, or to 4 when the
 environment variable is unset. The fixed default prevents machines with
 different core counts from silently defining different searches. The solver
-prints the selected Parallel STL backend at startup. `starts` sets the maximum total number of search starts **per run**, distributed among the logical lanes, and defaults to 200000. A loaded best-known value is used as a target for early stopping; if no matching reference is available, execution continues until the time or start budget is exhausted.
+prints the selected Parallel STL backend at startup. `starts` sets the maximum total number of search starts per run, distributed among the logical lanes, and defaults to 200000. A best-known value is used as a target for early stopping; if no best-known value is available, execution continues until the time limit or start budget is exhausted.
 
 To run with the default setting:
 
@@ -178,7 +178,7 @@ diverse greedy construction; the quality-preserving default is 200.
 For instances with $k>n/2$, the solver automatically applies the complement transformation
 
 $$
-y=\mathbf{1}-x,\qquad Q'=Q-2\operatorname{Diag}(Q\mathbf{1}),
+y=\mathbf{1}-x,\qquad Q'=Q-2\mathrm{Diag}(Q\mathbf{1}),
 $$
 
 resulting in an equivalent FCBQP with cardinality $k'=n-k<n/2$. The constant objective offset $c=\mathbf{1}^{\top}Q\mathbf{1}$ is retained to recover the original objective value:
@@ -187,7 +187,7 @@ $$
 x^{\top}Qx=y^{\top}Q'y+c.
 $$
 
-After solving a complemented instance, the solver restores the original variable assignment and independently checks the reported objective using the original cost matrix and original cardinality constraint. 
+After solving a complemented instance, the code restores the original variable assignment and independently checks the reported objective using the original cost matrix and original cardinality constraint. 
 
 The repository includes regression tests for solver correctness and the cardinality-complement transformation. Run all tests using:
 
