@@ -8,7 +8,7 @@ The main implementation is in `main.cpp`.
 
 The best-known/reference results are stored in `best_known_results.csv`.
 
-The detailed computational results mentioned in the paper are provided in `summary_results.xlsx`.
+The detailed computational results mentioned in the paper are provided in `summary_results.xlsx`. The code used to obtain these results was compiled using `make build-gcc-fast`.
 
 The fixed-cardinality binary quadratic program is:
 
@@ -142,7 +142,7 @@ Cardinalities from `0` through `n` are accepted. The trivial cases `k = 0`, `k =
 
 `workers` defaults to the value of `FCBQP_NUM_THREADS`, or to 4 when the
 environment variable is unset. The fixed default prevents machines with
-different core counts from silently defining different searches. The solver
+different core counts from silently defining different searches. The code
 prints the selected Parallel STL backend at startup. `starts` sets the maximum total number of search starts per run, distributed among the logical lanes, and defaults to 200000. A best-known value is used as a target for early stopping; if no best-known value is available, execution continues until the time limit or start budget is exhausted.
 
 To run with the default setting:
@@ -157,11 +157,11 @@ For example:
 ./build/main max half dataset/MDP/GKD-c/GKD-c_1_n500_m50.txt best_known_results.csv
 ```
 
-The `max|min` argument chooses the optimization sense. The solver internally minimizes (negating matrix coefficients for maximization), then restores the requested sense when reporting the objective. `full` reports the objective as $x^\top Qx$, while `half` reports half that value. Best-known/reference values must use the chosen reporting scale.
+The `max|min` argument chooses the optimization sense. The code internally minimizes (negating matrix coefficients for maximization), then restores the requested sense when reporting the objective. `full` reports the objective as $x^\top Qx$, while `half` reports half that value. Best-known/reference values must use the chosen reporting scale.
 
 Each deterministic epoch uses one logical lane per worker by default. Physical
 workers dynamically claim lanes, while results are merged in lane-ID order.
-The solver exchanges a deterministic logical-work cutoff when a lane reaches
+The algorithm exchanges a deterministic logical-work cutoff when a lane reaches
 the target. All lanes finish their current start at the epoch barrier, and
 results beyond that cutoff are discarded deterministically. This avoids a
 speed-dependent mid-kernel cancellation point. Set
@@ -175,7 +175,7 @@ diverse greedy construction; the quality-preserving default is 200.
 
 ## Cardinality-complement transformation
 
-For instances with $k>n/2$, the solver automatically applies the complement transformation
+For instances with $k>n/2$, the code automatically applies the complement transformation
 
 $$
 y=\mathbf{1}-x,\qquad Q'=Q-2\mathrm{Diag}(Q\mathbf{1}),
@@ -189,7 +189,7 @@ $$
 
 After solving a complemented instance, the code restores the original variable assignment and independently checks the reported objective using the original cost matrix and original cardinality constraint. 
 
-The repository includes regression tests for solver correctness and the cardinality-complement transformation. Run all tests using:
+The repository includes regression tests for code correctness and the cardinality-complement transformation. Run all tests using:
 
 ```bash
 make test

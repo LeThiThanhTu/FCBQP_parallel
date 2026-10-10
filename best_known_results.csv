@@ -123,8 +123,8 @@ MDG-c_1_n3000_m300,24926344.000000, [3],best-known
 MDG-c_2_n3000_m300,24912546.000000, [3],best-known
 MDG-c_3_n3000_m300,24905218.000000, [3],best-known
 MDG-c_4_n3000_m300,24909710.000000, [3],best-known
-MDG-c_5_n3000_m300,24899703.000000,ITS / [4],best-known
-MDG-c_6_n3000_m400,43465087.000000,ITS / [4],best-known
+MDG-c_5_n3000_m300,24899703.000000,"ITS / [4], [5]",best-known
+MDG-c_6_n3000_m400,43465087.000000,"ITS / [4], [5]",best-known
 MDG-c_7_n3000_m400,43477267.000000,[4],best-known
 MDG-c_8_n3000_m400,43465572.000000,ITS / [1],best-known
 MDG-c_9_n3000_m400,43448137.000000,[1],best-known
@@ -182,12 +182,12 @@ LA_n6000_m500,62332519.393470,OBMA [3] ,reference/best
 Bibsonomy_n9269_m100,417.891670,Gurobi/ [7],reference/opt
 Bibsonomy_n9269_m200,594.532680,Gurobi/ [7],reference/opt
 Bibsonomy_n9269_m300,733.412140,Gurobi/ [7],reference/opt
-Bibsonomy_n9269_m400,854.72223,Gurobi/ [7],reference/opt
+Bibsonomy_n9269_m400,854.722230,Gurobi/ [7],reference/opt
 Bibsonomy_n9269_m500,963.024160,Gurobi/ [7],reference/opt
 DBLP_n7159_m100,139.141710,Gurobi/ [7],reference/opt
 DBLP_n7159_m200,239.888530,Gurobi/ [7],reference/opt
 DBLP_n7159_m300,324.051630,Gurobi/ [7],reference/opt
-DBLP_n7159_m400,397.10394,Gurobi/ [7],reference/opt
+DBLP_n7159_m400,397.103940,Gurobi/ [7],reference/opt
 DBLP_n7159_m500,462.223460,Gurobi/ [7],reference/opt
 IMDB_n1021_m100,73.725110,Gurobi/ [7],reference/opt
 IMDB_n1021_m200,135.451230,Gurobi/ [7],reference/opt
@@ -206,23 +206,23 @@ synthetic_10_n7000_m400,442.890615,Gurobi/ [7],reference/opt
 synthetic_10_n7000_m500,524.157270,Gurobi/ [7],reference/opt
 synthetic_1_n7000_m100,142.136800,Gurobi/ [7],reference/opt
 synthetic_1_n7000_m200,247.797060,Gurobi/ [7],reference/opt
-synthetic_1_n7000_m300,336.30566,Gurobi/ [7],reference/opt
+synthetic_1_n7000_m300,336.305660,Gurobi/ [7],reference/opt
 synthetic_1_n7000_m400,416.795085,Gurobi/ [7],reference/opt
 synthetic_1_n7000_m500,488.819325,Gurobi/ [7],reference/opt
 synthetic_2_n7000_m100,160.608420,Gurobi/ [7],reference/opt
 synthetic_2_n7000_m200,282.062190,Gurobi/ [7],reference/opt
-synthetic_2_n7000_m300,388.39409,Gurobi/ [7],reference/opt
+synthetic_2_n7000_m300,388.394090,Gurobi/ [7],reference/opt
 synthetic_2_n7000_m400,483.961750,Gurobi/ [7],reference/opt
 synthetic_2_n7000_m500,572.514190,Gurobi/ [7],reference/opt
 synthetic_3_n7000_m100,156.429310,Gurobi/ [7],reference/opt
 synthetic_3_n7000_m200,266.122850,Gurobi/ [7],reference/opt
 synthetic_3_n7000_m300,361.996630,Gurobi/ [7],reference/opt
-synthetic_3_n7000_m400,446.82528,Gurobi/ [7],reference/opt
+synthetic_3_n7000_m400,446.825280,Gurobi/ [7],reference/opt
 synthetic_3_n7000_m500,523.845630,Gurobi/ [7],reference/opt
 synthetic_4_n7000_m100,129.363420,Gurobi/ [7],reference/opt
 synthetic_4_n7000_m200,238.347300,Gurobi/ [7],reference/opt
 synthetic_4_n7000_m300,337.328620,Gurobi/ [7],reference/opt
-synthetic_4_n7000_m400,428.83992,Gurobi/ [7],reference/opt
+synthetic_4_n7000_m400,428.839920,Gurobi/ [7],reference/opt
 synthetic_4_n7000_m500,511.227530,Gurobi/ [7],reference/opt
 synthetic_5_n7000_m100,147.212980,Gurobi/ [7],reference/opt
 synthetic_5_n7000_m200,256.883510,Gurobi/ [7],reference/opt
@@ -232,7 +232,7 @@ synthetic_5_n7000_m500,520.362810,Gurobi/ [7],reference/opt
 synthetic_6_n7000_m100,140.004530,Gurobi/ [7],reference/opt
 synthetic_6_n7000_m200,247.845850,Gurobi/ [7],reference/opt
 synthetic_6_n7000_m300,338.793630,Gurobi/ [7],reference/opt
-synthetic_6_n7000_m400,419.42607,Gurobi/ [7],reference/opt
+synthetic_6_n7000_m400,419.426070,Gurobi/ [7],reference/opt
 synthetic_6_n7000_m500,494.061990,Gurobi/ [7],reference/opt
 synthetic_7_n7000_m100,161.743100,Gurobi/ [7],reference/opt
 synthetic_7_n7000_m200,285.377460,Gurobi/ [7],reference/opt
@@ -248,7 +248,7 @@ synthetic_9_n7000_m100,145.036110,Gurobi/ [7],reference/opt
 synthetic_9_n7000_m200,257.402590,Gurobi/ [7],reference/opt
 synthetic_9_n7000_m300,356.186360,Gurobi/ [7],reference/opt
 synthetic_9_n7000_m400,447.376880,Gurobi/ [7],reference/opt
-synthetic_9_n7000_m500,533.21672,Gurobi/ [7],reference/opt
+synthetic_9_n7000_m500,533.216720,Gurobi/ [7],reference/opt
 4elt.graph,139.000000,Gurobi / [10],best-known
 bcsstk29.graph,2843.000000,[10],best-known
 bcsstk30.graph,6394.000000,[10],best-known
@@ -256,83 +256,88 @@ crack.graph,184.000000,Gurobi / [10],best-known
 cti.graph,334.000000,[10],best-known
 fe_4elt2.graph,130.000000,Gurobi / [10],best-known
 fe_sphere.graph,386.000000,[10],best-known
-ca-AstroPh_n18772_m57,3192.000000,"Gurobi / [11], [12], [13]",reference/opt
-ca-CondMat_n23133_m26,650.000000,"Gurobi / [11], [12], [13]",reference/opt
-ca-GrQc_n5241_m44,1892.000000,"Gurobi / [11], [12], [13]",reference/opt
-ca-HepPh_n12006_m239,56882.000000,"Gurobi / [11], [12], [13]",reference/opt
-ca-HepTh_n9875_m32,992.000000,"Gurobi / [11], [12], [13]",reference/opt
-email_n1133_m12,132.000000,"Gurobi / [11], [12], [13]",reference/opt
-jazz_n198_m30,870.000000,"Gurobi / [11], [12], [13]",reference/opt
-brock200_2_m12,132.000000,[14],best-known
-brock200_4_m17,272.000000,[14],best-known
-brock400_2_m29,812.000000,[14],best-known
-brock400_4_m33,1056.000000,[14],best-known
-brock800_2_m24,552.000000,[14],best-known
-brock800_4_m26,650.000000,[14],best-known
-C1000.9_m68,4556.000000,[14],best-known
-C125.9_m34,1122.000000,[14],opt
-C2000.5_m16,240.000000,[14],opt
-C2000.9_m80,6320.000000,[14],best-known
-C250.9_m44,1892.000000,[14],opt
-C4000.5_m18,306.000000,[14],opt
-C500.9_m57,3192.000000,[14],best-known
-DSJC1000_5_m15,210.000000,[14],best-known
-DSJC500_5_m13,156.000000,[14],best-known
-gen200_p0.9_44_m44,1892.000000,[14],best-known
-gen200_p0.9_55_m55,2970.000000,[14],best-known
-gen400_p0.9_55_m55,2970.000000,[14],best-known
-gen400_p0.9_65_m65,4160.000000,[14],best-known
-gen400_p0.9_75_m75,5550.000000,[14],best-known
-hamming10-4_m40,1560.000000,[14],best-known
-hamming8-4_m16,240.000000,[14],best-known
-keller4_m11,110.000000,[14],best-known
-keller5_m27,702.000000,[14],best-known
-keller6_m59,3422.000000,[14],best-known
-MANN_a27_m126,15750.000000,[14],best-known
-MANN_a45_m345,118680.000000,[14],best-known
-MANN_a81_m1100,1208900.000000,[14],opt
-p_hat1500-1_m12,132.000000,[14],best-known
-p_hat1500-2_m65,4160.000000,[14],opt
-p_hat1500-3_m94,8742.000000,[14],opt
-p_hat300-1_m8,56.000000,[14],best-known
-p_hat300-2_m25,600.000000,[14],best-known
-p_hat300-3_m36,1260.000000,[14],best-known
-p_hat700-1_m11,110.000000,[14],best-known
-p_hat700-2_m44,1892.000000,[14],best-known
-p_hat700-3_m62,3782.000000,[14],opt
-frb100-40,9506.000000,[15],best-known
-frb30-15-1,870.000000,[15],best-known
-frb30-15-2,870.000000,[15],best-known
-frb30-15-3,870.000000,[15],best-known
-frb30-15-4,870.000000,[15],best-known
-frb30-15-5,870.000000,[15],best-known
-frb35-17-1,1190.000000,[15],best-known
-frb35-17-2,1190.000000,[15],best-known
-frb35-17-3,1190.000000,[15],best-known
-frb35-17-4,1190.000000,[15],best-known
-frb35-17-5,1190.000000,[15],best-known
-frb40-19-1,1560.000000,[15],best-known
-frb40-19-2,1560.000000,[15],best-known
-frb40-19-3,1560.000000,[15],best-known
-frb40-19-4,1560.000000,[15],best-known
-frb40-19-5,1560.000000,[15],best-known
-frb45-21-1,1980.000000,[15],best-known
-frb45-21-2,1980.000000,[15],best-known
-frb45-21-3,1980.000000,[15],best-known
-frb45-21-4,1980.000000,[15],best-known
-frb45-21-5,1980.000000,[15],best-known
-frb50-23-1,2450.000000,[15],best-known
-frb50-23-2,2450.000000,[15],best-known
-frb50-23-3,2450.000000,[15],best-known
-frb50-23-4,2450.000000,[15],best-known
-frb50-23-5,2450.000000,[15],best-known
-frb53-24-1,2756.000000,[15],best-known
-frb53-24-2,2756.000000,[15],best-known
-frb53-24-3,2756.000000,[15],best-known
-frb53-24-4,2756.000000,[15],best-known
-frb53-24-5,2756.000000,[15],best-known
-frb59-26-1,3422.000000,[15],best-known
-frb59-26-2,3422.000000,[15],best-known
-frb59-26-3,3422.000000,[15],best-known
-frb59-26-4,3422.000000,[15],best-known
-frb59-26-5,3422.000000,[15],best-known
+ca-AstroPh_n18772_m57,3192.000000,"Gurobi / [11],  [13]",reference/opt
+ca-CondMat_n23133_m26,650.000000,"Gurobi / [11],  [13]",reference/opt
+ca-GrQc_n5241_m44,1892.000000,"Gurobi / [11],  [13]",reference/opt
+ca-HepPh_n12006_m239,56882.000000,"Gurobi / [11],  [13]",reference/opt
+ca-HepTh_n9875_m32,992.000000,"Gurobi / [11],  [13]",reference/opt
+email_n1133_m12,132.000000,"Gurobi / [12], [13]",reference/opt
+jazz_n198_m30,870.000000,"Gurobi / [12], [13]",reference/opt
+brock200_2_m12,132.000000,[8],best-known
+brock200_4_m17,272.000000,[8],best-known
+brock400_2_m29,812.000000,[8],best-known
+brock400_4_m33,1056.000000,[8],best-known
+brock800_2_m24,552.000000,[8],best-known
+brock800_4_m26,650.000000,[8],best-known
+C1000.9_m68,4556.000000,[8],best-known
+C125.9_m34,1122.000000,[8],opt
+C2000.5_m16,240.000000,[8],opt
+C2000.9_m80,6320.000000,[8],best-known
+C250.9_m44,1892.000000,[8],opt
+C4000.5_m18,306.000000,[8],opt
+C500.9_m57,3192.000000,[8],best-known
+DSJC1000_5_m15,210.000000,[8],best-known
+DSJC500_5_m13,156.000000,[8],best-known
+gen200_p0.9_44_m44,1892.000000,[8],best-known
+gen200_p0.9_55_m55,2970.000000,[8],best-known
+gen400_p0.9_55_m55,2970.000000,[8],best-known
+gen400_p0.9_65_m65,4160.000000,[8],best-known
+gen400_p0.9_75_m75,5550.000000,[8],best-known
+hamming10-4_m40,1560.000000,[8],best-known
+hamming8-4_m16,240.000000,[8],best-known
+keller4_m11,110.000000,[8],best-known
+keller5_m27,702.000000,[8],best-known
+keller6_m59,3422.000000,[8],best-known
+MANN_a27_m126,15750.000000,[8],best-known
+MANN_a45_m345,118680.000000,[8],best-known
+MANN_a81_m1100,1208900.000000,[8],opt
+p_hat1500-1_m12,132.000000,[8],best-known
+p_hat1500-2_m65,4160.000000,[8],opt
+p_hat1500-3_m94,8742.000000,[8],opt
+p_hat300-1_m8,56.000000,[8],best-known
+p_hat300-2_m25,600.000000,[8],best-known
+p_hat300-3_m36,1260.000000,[8],best-known
+p_hat700-1_m11,110.000000,[8],best-known
+p_hat700-2_m44,1892.000000,[8],best-known
+p_hat700-3_m62,3782.000000,[8],opt
+frb100-40,9900.000000,[9],best-known
+frb30-15-1,870.000000,[9],best-known
+frb30-15-2,870.000000,[9],best-known
+frb30-15-3,870.000000,[9],best-known
+frb30-15-4,870.000000,[9],best-known
+frb30-15-5,870.000000,[9],best-known
+frb35-17-1,1190.000000,[9],best-known
+frb35-17-2,1190.000000,[9],best-known
+frb35-17-3,1190.000000,[9],best-known
+frb35-17-4,1190.000000,[9],best-known
+frb35-17-5,1190.000000,[9],best-known
+frb40-19-1,1560.000000,[9],best-known
+frb40-19-2,1560.000000,[9],best-known
+frb40-19-3,1560.000000,[9],best-known
+frb40-19-4,1560.000000,[9],best-known
+frb40-19-5,1560.000000,[9],best-known
+frb45-21-1,1980.000000,[9],best-known
+frb45-21-2,1980.000000,[9],best-known
+frb45-21-3,1980.000000,[9],best-known
+frb45-21-4,1980.000000,[9],best-known
+frb45-21-5,1980.000000,[9],best-known
+frb50-23-1,2450.000000,[9],best-known
+frb50-23-2,2450.000000,[9],best-known
+frb50-23-3,2450.000000,[9],best-known
+frb50-23-4,2450.000000,[9],best-known
+frb50-23-5,2450.000000,[9],best-known
+frb53-24-1,2756.000000,[9],best-known
+frb53-24-2,2756.000000,[9],best-known
+frb53-24-3,2756.000000,[9],best-known
+frb53-24-4,2756.000000,[9],best-known
+frb53-24-5,2756.000000,[9],best-known
+frb59-26-1,3422.000000,[9],best-known
+frb59-26-2,3422.000000,[9],best-known
+frb59-26-3,3422.000000,[9],best-known
+frb59-26-4,3422.000000,[9],best-known
+frb59-26-5,3422.000000,[9],best-known
+frb56-25-1,3080.000000,[9],best-known
+frb56-25-2,3080.000000,[9],best-known
+frb56-25-3,3080.000000,[9],best-known
+frb56-25-4,3080.000000,[9],best-known
+frb56-25-5,3080.000000,[9],best-known
