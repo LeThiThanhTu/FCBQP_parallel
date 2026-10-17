@@ -159,20 +159,6 @@ For example:
 
 The `max|min` argument chooses the optimization sense. The code internally minimizes (negating matrix coefficients for maximization), then restores the requested sense when reporting the objective. `full` reports the objective as $x^\top Qx$, while `half` reports half that value. Best-known/reference values must use the chosen reporting scale.
 
-Each deterministic epoch uses one logical lane per worker by default. Physical
-workers dynamically claim lanes, while results are merged in lane-ID order.
-The algorithm exchanges a deterministic logical-work cutoff when a lane reaches
-the target. All lanes finish their current start at the epoch barrier, and
-results beyond that cutoff are discarded deterministically. This avoids a
-speed-dependent mid-kernel cancellation point. Set
-`FCBQP_EPOCH_LANES_PER_WORKER` to a positive integer to overdecompose the
-search; because it changes the seeded search streams, it is part of the
-deterministic configuration.
-`FCBQP_ELITE_GROUP_SIZE` can partition those lanes into fixed independent
-elite-sharing groups. Group membership and all exchanges remain deterministic.
-`FCBQP_CONSTRUCTION_MAX_ATTEMPTS` sets the deterministic retry budget for a
-diverse greedy construction; the quality-preserving default is 200.
-
 ## Cardinality-complement transformation
 
 For instances with $k>n/2$, the code automatically applies the complement transformation
@@ -197,15 +183,9 @@ make test
 
 ## Determinism
 
-With a fixed input, seed, worker count, epoch-lane factor, and start budget,
-solution fields are deterministic when `time_limit_seconds` is 0. Logical
-lanes advance in synchronous search epochs and elite candidates are merged in
-lane-ID order. RNG mapping and candidate tie-breaking are independent of the
-standard-library implementation.
+With a fixed input, seed, worker count, epoch-lane factor, and start budget, solution fields are deterministic when `time_limit_seconds` is 0. Elite candidates are merged in lane-ID order. RNG mapping and candidate tie-breaking are independent of the standard-library implementation.
 
-A positive time limit is the explicit exception because machine speed controls
-how many epochs finish. Timing measurements such as TTS and wall time naturally
-vary even when the solution is identical. 
+A positive time limit is the explicit exception because machine speed controls how many epochs finish. Timing measurements such as TTS and wall time naturally vary even when the solution is identical. 
 
 Check deterministic fixed-work behavior with 
 
