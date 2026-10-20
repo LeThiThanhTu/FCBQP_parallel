@@ -202,13 +202,13 @@ StackOverflow_n8834_m500,202.688120,Gurobi/ [7],reference/opt
 synthetic_10_n7000_m100,142.716650,Gurobi/ [7],reference/opt
 synthetic_10_n7000_m200,255.612690,Gurobi/ [7],reference/opt
 synthetic_10_n7000_m300,354.480310,Gurobi/ [7],reference/opt
-synthetic_10_n7000_m400,442.890615,Gurobi/ [7],reference/opt
-synthetic_10_n7000_m500,524.157270,Gurobi/ [7],reference/opt
+synthetic_10_n7000_m400,442.883040,Gurobi/ [7],reference/opt
+synthetic_10_n7000_m500,524.142550,Gurobi/ [7],reference/opt
 synthetic_1_n7000_m100,142.136800,Gurobi/ [7],reference/opt
 synthetic_1_n7000_m200,247.797060,Gurobi/ [7],reference/opt
 synthetic_1_n7000_m300,336.305660,Gurobi/ [7],reference/opt
-synthetic_1_n7000_m400,416.795085,Gurobi/ [7],reference/opt
-synthetic_1_n7000_m500,488.819325,Gurobi/ [7],reference/opt
+synthetic_1_n7000_m400,416.785470,Gurobi/ [7],reference/opt
+synthetic_1_n7000_m500,488.809710,Gurobi/ [7],reference/opt
 synthetic_2_n7000_m100,160.608420,Gurobi/ [7],reference/opt
 synthetic_2_n7000_m200,282.062190,Gurobi/ [7],reference/opt
 synthetic_2_n7000_m300,388.394090,Gurobi/ [7],reference/opt
